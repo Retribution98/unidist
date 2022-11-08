@@ -191,3 +191,20 @@ def test_signal_actor():
         tasks.append(func.remote(idx))
 
     assert_equal(tasks, [0, 1, 2, 3, 4])
+
+
+def test_pending_get():
+    @unidist.remote
+    class SlowActor:
+        async def slow_execute():
+            asyncio.sleep(5)
+            return 1
+
+    slow_actor = SlowActor.remote()
+    slow_result = unidist.get(slow_actor.slow_execute.remote())
+
+    @unidist.remote
+    def g():
+        return slow_result + 1
+
+    assert_equal(g.remote(), 2)
