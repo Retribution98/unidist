@@ -22,11 +22,6 @@ else:
 import cloudpickle as cpkl
 import msgpack
 import gc  # msgpack optimization
-import psutil
-import os
-import unidist.core.backends.mpi.core.common as common
-
-logger = common.get_logger('serialization', 'serialization.log')
 
 # Pickle 5 protocol compatible types check
 compatible_modules = ("pandas", "numpy")
@@ -200,20 +195,7 @@ class ComplexDataSerializer:
         -----
         Uses msgpack, cloudpickle and pickle libraries.
         """
-        process = psutil.Process(os.getpid())
-        memory_start = process.memory_full_info()
-        result = msgpack.packb(data, default=self._encode_custom)
-        memory_end = process.memory_full_info()
-        logger.debug(f'SERILALIZITION: {data}')
-        logger.debug(f'rss = {memory_end.rss - memory_start.rss} | {memory_start.rss} - {memory_end.rss}')
-        logger.debug(f'vms = {memory_end.vms - memory_start.vms} | {memory_start.vms} - {memory_end.vms}')
-        logger.debug(f'shared = {memory_end.shared - memory_start.shared} | {memory_start.shared} - {memory_end.shared}')
-        logger.debug(f'text = {memory_end.text - memory_start.text} | {memory_start.text} - {memory_end.text}')
-        logger.debug(f'data = {memory_end.data - memory_start.data} | {memory_start.data} - {memory_end.data}')
-        logger.debug(f'uss = {memory_end.uss - memory_start.uss} | {memory_start.uss} - {memory_end.uss}')
-        logger.debug(f'pss = {memory_end.pss - memory_start.pss} | {memory_start.pss} - {memory_end.pss}')
-        logger.debug('\n')
-        return result
+        return msgpack.packb(data, default=self._encode_custom)
 
     def _decode_custom(self, obj):
         """
