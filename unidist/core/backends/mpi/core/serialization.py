@@ -75,13 +75,13 @@ def is_pickle5_serializable(data):
     bool
         ``True`` if the data should be serialized with pickle using protocol 5 (out-of-band data).
     """
-    is_serializable = False
     for module in available_modules:
-        if module.__name__ == "pandas":
-            is_serializable = isinstance(data, (module.DataFrame, module.Series))
-        elif module.__name__ == "numpy":
-            is_serializable = isinstance(data, module.ndarray)
-    return is_serializable
+        if (module.__name__ == "pandas" and isinstance(data, (module.DataFrame, module.Series))):
+            return True
+        elif (module.__name__ == "numpy" and isinstance(data, module.ndarray)):
+            return True
+
+    return False
 
 
 class ComplexDataSerializer:
@@ -181,10 +181,13 @@ class ComplexDataSerializer:
             Python object.
         """
         if is_pickle5_serializable(obj):
+            logger.debug(f'PICKLE5: {type(obj)}')
             return self._dataframe_encode(obj)
         elif is_cpkl_serializable(obj):
+            logger.debug(f'CLOUD PICKLE: {type(obj)}')
             return self._cpkl_encode(obj)
         else:
+            logger.debug(f'PICKLE: {type(obj)}')
             return self._pkl_encode(obj)
 
     def serialize(self, data):
