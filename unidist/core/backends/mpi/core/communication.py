@@ -327,6 +327,7 @@ def _send_complex_data_impl_version_1(comm, s_data, raw_buffers, len_buffers, de
             mpi_send_object(comm, len_buffers, dest_rank)
         else:
             mpi_send_object(comm, len(array_lengths), dest_rank)
+            mpi_send_object(comm, len_buffers, dest_rank)
     except Exception as ex:
         logger.exception(ex)
         raise ex
@@ -358,6 +359,8 @@ def _isend_complex_data_impl_version_1(comm, s_data, raw_buffers, len_buffers, d
         else:
             h6 = mpi_isend_object(comm, len(array_lengths), dest_rank)
             handlers.append((h6, array_lengths))
+            h7 = mpi_isend_object(comm, len_buffers, dest_rank)
+            handlers.append((h7, len_buffers))
     except Exception as ex:
         logger.exception(ex)
         raise ex
@@ -422,7 +425,8 @@ def _recv_complex_data_version_1(comm, source_rank):
                 else:
                     raw_buffers.append(buffer)
         else:
-            s_data = msgpack_buffer_mv[:]
+            s_data = msgpack_buffer_mv
+            len_buffers = comm.recv(source=source_rank)
 
          # Set the necessary metadata for unpacking
         
@@ -542,29 +546,29 @@ def _isend_complex_data_impl(comm, s_data, raw_buffers, len_buffers, dest_rank):
     list
         A list of pairs, ``MPI_Isend`` handler and associated data to send.
     """
-    return _isend_complex_data_impl_version_1(comm, s_data, raw_buffers, len_buffers, dest_rank)
+    # return _isend_complex_data_impl_version_1(comm, s_data, raw_buffers, len_buffers, dest_rank)
     
-    # handlers = []
+    handlers = []
 
-    # # Send message pack bytestring
-    # h1 = mpi_isend_object(comm, len(s_data), dest_rank)
-    # h2 = mpi_isend_buffer(comm, s_data, dest_rank)
-    # handlers.append((h1, None))
-    # handlers.append((h2, s_data))
+    # Send message pack bytestring
+    h1 = mpi_isend_object(comm, len(s_data), dest_rank)
+    h2 = mpi_isend_buffer(comm, s_data, dest_rank)
+    handlers.append((h1, None))
+    handlers.append((h2, s_data))
 
-    # # Send the necessary metadata
-    # h3 = mpi_isend_object(comm, len(raw_buffers), dest_rank)
-    # handlers.append((h3, None))
-    # for raw_buffer in raw_buffers:
-    #     h4 = mpi_isend_object(comm, len(raw_buffer.raw()), dest_rank)
-    #     h5 = mpi_isend_buffer(comm, raw_buffer, dest_rank)
-    #     handlers.append((h4, None))
-    #     handlers.append((h5, raw_buffer))
-    # # TODO: do not send if raw_buffers is zero
-    # h6 = mpi_isend_object(comm, len_buffers, dest_rank)
-    # handlers.append((h6, len_buffers))
+    # Send the necessary metadata
+    h3 = mpi_isend_object(comm, len(raw_buffers), dest_rank)
+    handlers.append((h3, None))
+    for raw_buffer in raw_buffers:
+        h4 = mpi_isend_object(comm, len(raw_buffer.raw()), dest_rank)
+        h5 = mpi_isend_buffer(comm, raw_buffer, dest_rank)
+        handlers.append((h4, None))
+        handlers.append((h5, raw_buffer))
+    # TODO: do not send if raw_buffers is zero
+    h6 = mpi_isend_object(comm, len_buffers, dest_rank)
+    handlers.append((h6, len_buffers))
 
-    # return handlers
+    return handlers
 
 
 def _isend_complex_data(comm, data, dest_rank):

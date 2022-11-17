@@ -176,13 +176,10 @@ class ComplexDataSerializer:
             Python object.
         """
         if is_pickle5_serializable(obj):
-            logger.debug(f'PICKLE5: {type(obj)}')
             return self._dataframe_encode(obj)
         elif is_cpkl_serializable(obj):
-            logger.debug(f'CLOUD PICKLE: {type(obj)}')
             return self._cpkl_encode(obj)
         else:
-            logger.debug(f'PICKLE: {type(obj)}')
             return self._pkl_encode(obj)
 
     def serialize(self, data):
