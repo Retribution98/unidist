@@ -16,7 +16,8 @@ except ImportError:
     ) from None
 
 from unidist.core.backends.mpi.core.serialization import (
-    ComplexDataSerializer,
+    deserialize,
+    serialize,
     SimpleDataSerializer,
 )
 import unidist.core.backends.mpi.core.common as common
@@ -236,27 +237,6 @@ def mpi_recv_buffer(comm, source_rank):
     return s_buffer
 
 
-def mpi_isend_buffer(comm, data, dest_rank, type=MPI.CHAR):
-    """
-    Send buffer object to another MPI rank in a non-blocking way.
-
-    Parameters
-    ----------
-    comm : object
-        MPI communicator object.
-    data : object
-        Buffer object to send.
-    dest_rank : int
-        Target MPI process to transfer data.
-
-    Returns
-    -------
-    object
-        A handler to MPI_Isend communication result.
-    """
-    return comm.Isend([data, type], dest=dest_rank)
-
-
 def mpi_busy_wait_recv(comm, source_rank):
     """
     Wait for receive operation result in a custom busy wait loop.
@@ -309,184 +289,30 @@ def recv_operation_type(comm):
 # --------------------------------- #
 # Communication operation functions #
 # --------------------------------- #
-import numpy as np
-def _send_complex_data_impl_version_1(comm, s_data, raw_buffers, len_buffers, dest_rank):
-    try:
-        join_array = bytearray()
-        array_lengths = list()
-        join_array += s_data
-        array_lengths.append(len(s_data))
-        for raw_buffer in raw_buffers:
-            array_lengths.append(len(raw_buffer.raw()))
-            join_array += raw_buffer
-        
-        mpi_send_buffer(comm, len(join_array), join_array, dest_rank)
-        if len(array_lengths) > 1:
-            mpi_send_buffer(comm, len(array_lengths), np.array(array_lengths), dest_rank, type=MPI.INT)
-            #TODO remove sending len_buffers
-            mpi_send_object(comm, len_buffers, dest_rank)
-        else:
-            mpi_send_object(comm, len(array_lengths), dest_rank)
-            mpi_send_object(comm, len_buffers, dest_rank)
-    except Exception as ex:
-        logger.exception(ex)
-        raise ex
-
-
-def _isend_complex_data_impl_version_1(comm, s_data, raw_buffers, len_buffers, dest_rank):
-    handlers = []
-    try:
-        join_array = bytearray()
-        array_lengths = list()
-        join_array += s_data
-        array_lengths.append(len(s_data))
-        for raw_buffer in raw_buffers:
-            array_lengths.append(len(raw_buffer.raw()))
-            join_array += raw_buffer
-        
-        h1 = mpi_isend_object(comm, len(join_array), dest_rank)
-        h2 = mpi_isend_buffer(comm, join_array, dest_rank)
-        handlers.append((h1, None))
-        handlers.append((h2, join_array))
-        if len(array_lengths) > 1:
-            h3 = mpi_isend_object(comm, len(array_lengths), dest_rank)
-            h4 = mpi_isend_buffer(comm, array_lengths, dest_rank, type=MPI.INT)
-            handlers.append((h3, None))
-            handlers.append((h4, array_lengths))
-            #TODO remove sending len_buffers
-            h5 = mpi_isend_object(comm, len_buffers, dest_rank)
-            handlers.append((h5, len_buffers))
-        else:
-            h6 = mpi_isend_object(comm, len(array_lengths), dest_rank)
-            handlers.append((h6, array_lengths))
-            h7 = mpi_isend_object(comm, len_buffers, dest_rank)
-            handlers.append((h7, len_buffers))
-    except Exception as ex:
-        logger.exception(ex)
-        raise ex
-    return handlers
-
-
-def _send_complex_data_impl(comm, s_data, raw_buffers, len_buffers, dest_rank, version=0):
+def recv_complex_data(comm, source_rank):
     """
-    Send already serialized complex data.
+        Receive the data that may consist of different user provided complex types, lambdas and buffers.
 
-    Parameters
-    ----------
-    comm : object
-        MPI communicator object.
-    s_data : bytearray
-        Serialized data as bytearray.
-    raw_buffers : list
-        Pickle buffers list, out-of-band data collected with pickle 5 protocol.
-    len_buffers : list
-        Size of each buffer from `raw_buffers` list.
-    dest_rank : int
-        Target MPI process to transfer data.
+        The data is de-serialized from received buffer.
+    m
+        Parameters
+        ----------
+        comm : object
+            MPI communicator object.
+        source_rank : int
+            Source MPI process to receive data from.
+
+        Returns
+        -------
+        object
+            Received data object from another MPI process.
     """
-    if version == 1:
-        _send_complex_data_impl_version_1(comm, s_data, raw_buffers, len_buffers, dest_rank)
-        return
-
-    # Send message pack bytestring
-    mpi_send_buffer(comm, len(s_data), s_data, dest_rank)
-    # Send the necessary metadata
-    mpi_send_object(comm, len(raw_buffers), dest_rank)
-    for raw_buffer in raw_buffers:
-        mpi_send_buffer(comm, len(raw_buffer.raw()), raw_buffer, dest_rank)
-    # TODO: do not send if raw_buffers is zero
-    mpi_send_object(comm, len_buffers, dest_rank)
-
-
-def _recv_complex_data_version_1(comm, source_rank):
-    try:
-        buf_size = mpi_busy_wait_recv(comm, source_rank)
-        msgpack_buffer = bytearray(buf_size)
-        comm.Recv([msgpack_buffer, MPI.CHAR], source=source_rank)
-
-        msgpack_buffer_mv = memoryview(msgpack_buffer)
-
-        buf_size = comm.recv(source=source_rank)
-        raw_buffers = []
-        len_buffers = []
-        s_data = []
-        if buf_size > 1:
-            recv_buffer = np.zeros(buf_size).astype(int)
-            comm.Recv([recv_buffer, MPI.INT], source=source_rank)
-            len_buffers = comm.recv(source=source_rank)
-
-            start_index = 0
-            for i in range(buf_size):
-                new_end_index = start_index + recv_buffer[i]
-                buffer = msgpack_buffer_mv[start_index:new_end_index]
-                start_index = new_end_index
-                if i == 0:
-                    s_data = buffer
-                else:
-                    raw_buffers.append(buffer)
-        else:
-            s_data = msgpack_buffer_mv
-            len_buffers = comm.recv(source=source_rank)
-
-         # Set the necessary metadata for unpacking
-        
-        deserializer = ComplexDataSerializer(raw_buffers, len_buffers)
-        logger.debug(s_data)
-        # Start unpacking
-        return deserializer.deserialize(s_data)
-    except Exception as ex:
-        logger.exception(ex)
-        raise ex
-
-
-def recv_complex_data(comm, source_rank, version=0):
-    """
-    Receive the data that may consist of different user provided complex types, lambdas and buffers.
-
-    The data is de-serialized from received buffer.
-m
-    Parameters
-    ----------
-    comm : object
-        MPI communicator object.
-    source_rank : int
-        Source MPI process to receive data from.
-
-    Returns
-    -------
-    object
-        Received data object from another MPI process.
-    """
-    if version == 1:
-        return _recv_complex_data_version_1(comm, source_rank)
-
-    # Recv main message pack buffer.
-    # First MPI call uses busy wait loop to remove possible contention
-    # in a long running data receive operations.
-    buf_size = mpi_busy_wait_recv(comm, source_rank)
-    msgpack_buffer = bytearray(buf_size)
-    comm.Recv([msgpack_buffer, MPI.CHAR], source=source_rank)
-
-    # Recv pickle buffers array for all complex data frames
-    raw_buffers_size = comm.recv(source=source_rank)
-    # Pre-allocate pickle buffers list
-    raw_buffers = [None] * raw_buffers_size
-    for i in range(raw_buffers_size):
-        buf_size = comm.recv(source=source_rank)
-        recv_buffer = bytearray(buf_size)
-        comm.Recv([recv_buffer, MPI.CHAR], source=source_rank)
-        raw_buffers[i] = recv_buffer
-    # Recv len of buffers for each complex data frames
-    len_buffers = comm.recv(source=source_rank)
-
-    # Set the necessary metadata for unpacking
-    deserializer = ComplexDataSerializer(raw_buffers, len_buffers)
-
+    msgpack_buffer = mpi_busy_wait_recv(comm, source_rank)
     # Start unpacking
-    return deserializer.deserialize(msgpack_buffer)
+    return deserialize(msgpack_buffer)
 
 
-def send_complex_data(comm, data, dest_rank, version=0):
+def send_complex_data(comm, data, dest_rank, is_serialized=False):
     """
     Send the data that consists of different user provided complex types, lambdas and buffers.
 
@@ -508,110 +334,10 @@ def send_complex_data(comm, data, dest_rank, version=0):
     list
         A list of buffers amount for each object.
     """
-    serializer = ComplexDataSerializer()
-    # Main job
-    s_data = serializer.serialize(data)
-    # Retrive the metadata
-    raw_buffers = serializer.buffers
-    len_buffers = serializer.len_buffers
-
-    # MPI comminucation
-    _send_complex_data_impl(comm, s_data, raw_buffers, len_buffers, dest_rank, version)
-
-    # For caching purpose
-    return s_data, raw_buffers, len_buffers
-
-
-def _isend_complex_data_impl(comm, s_data, raw_buffers, len_buffers, dest_rank):
-    """
-    Send serialized complex data.
-
-    Non-blocking asynchronous interface.
-
-    Parameters
-    ----------
-    comm : object
-        MPI communicator object.
-    s_data : object
-        A serialized msgpack data.
-    raw_buffers : list
-        A list of pickle buffers.
-    len_buffers : list
-        A list of buffers amount for each object.
-    dest_rank : int
-        Target MPI process to transfer data.
-
-    Returns
-    -------
-    list
-        A list of pairs, ``MPI_Isend`` handler and associated data to send.
-    """
-    # return _isend_complex_data_impl_version_1(comm, s_data, raw_buffers, len_buffers, dest_rank)
-    
-    handlers = []
-
-    # Send message pack bytestring
-    h1 = mpi_isend_object(comm, len(s_data), dest_rank)
-    h2 = mpi_isend_buffer(comm, s_data, dest_rank)
-    handlers.append((h1, None))
-    handlers.append((h2, s_data))
-
-    # Send the necessary metadata
-    h3 = mpi_isend_object(comm, len(raw_buffers), dest_rank)
-    handlers.append((h3, None))
-    for raw_buffer in raw_buffers:
-        h4 = mpi_isend_object(comm, len(raw_buffer.raw()), dest_rank)
-        h5 = mpi_isend_buffer(comm, raw_buffer, dest_rank)
-        handlers.append((h4, None))
-        handlers.append((h5, raw_buffer))
-    # TODO: do not send if raw_buffers is zero
-    h6 = mpi_isend_object(comm, len_buffers, dest_rank)
-    handlers.append((h6, len_buffers))
-
-    return handlers
-
-
-def _isend_complex_data(comm, data, dest_rank):
-    """
-    Send the data that consists of different user provided complex types, lambdas and buffers.
-
-    Non-blocking asynchronous interface.
-
-    Parameters
-    ----------
-    comm : object
-        MPI communicator object.
-    data : object
-        Data object to send.
-    dest_rank : int
-        Target MPI process to transfer data.
-
-    Returns
-    -------
-    list
-        A list of pairs, ``MPI_Isend`` handler and associated data to send.
-    object
-        A serialized msgpack data.
-    list
-        A list of pickle buffers.
-    list
-        A list of buffers amount for each object.
-    """
-    handlers = []
-
-    serializer = ComplexDataSerializer()
-    # Main job
-    s_data = serializer.serialize(data)
-    # Retrive the metadata
-    raw_buffers = serializer.buffers
-    len_buffers = serializer.len_buffers
-
-    # Send message pack bytestring
-    handlers.extend(
-        _isend_complex_data_impl(comm, s_data, raw_buffers, len_buffers, dest_rank)
-    )
-
-    return handlers, s_data, raw_buffers, len_buffers
+    if not is_serialized:
+        data = serialize(data)
+    comm.send(data, dest=dest_rank)
+    return data
 
 
 # ---------- #
@@ -687,54 +413,8 @@ def recv_simple_operation(comm, source_rank):
     -----
     De-serialization is a simple pickle.load in this case
     """
-    return comm.recv(source=source_rank)
-
-
-def send_operation_data(comm, operation_data, dest_rank, is_serialized=False):
-    """
-    Send data that consists of different user provided complex types, lambdas and buffers.
-
-    The data is serialized with ``unidist.core.backends.mpi.core.ComplexDataSerializer``.
-    Function works with already serialized data.
-
-    Parameters
-    ----------
-    comm : object
-        MPI communicator object.
-    operation_data : object
-        Data object to send.
-    dest_rank : int
-        Target MPI process to transfer data.
-    is_serialized : bool
-        `operation_data` is already serialized or not.
-
-    Returns
-    -------
-    dict or None
-        Serialization data for caching purpose or nothing.
-
-    Notes
-    -----
-    Function returns ``None`` if `operation_data` is already serialized,
-    otherwise ``dict`` containing data serialized in this function.
-    """
-    if is_serialized:
-        # Send already serialized data
-        s_data = operation_data["s_data"]
-        raw_buffers = operation_data["raw_buffers"]
-        len_buffers = operation_data["len_buffers"]
-        _send_complex_data_impl(comm, s_data, raw_buffers, len_buffers, dest_rank)
-        return None
-    else:
-        # Serialize and send the data
-        s_data, raw_buffers, len_buffers = send_complex_data(
-            comm, operation_data, dest_rank
-        )
-        return {
-            "s_data": s_data,
-            "raw_buffers": raw_buffers,
-            "len_buffers": len_buffers,
-        }
+    result = comm.recv(source=source_rank)
+    return result
 
 
 def send_operation(
@@ -772,7 +452,9 @@ def send_operation(
     # Send operation type
     mpi_send_object(comm, operation_type, dest_rank)
     # Send operation data
-    return send_operation_data(comm, operation_data, dest_rank, is_serialized)
+    return send_complex_data(
+        comm, operation_data, dest_rank, is_serialized=is_serialized
+    )
 
 
 def isend_complex_operation(
@@ -814,30 +496,15 @@ def isend_complex_operation(
     h1 = mpi_isend_object(comm, operation_type, dest_rank)
     handlers.append((h1, None))
 
-    # Send operation data
-    if is_serialized:
-        # Send already serialized data
-        s_data = operation_data["s_data"]
-        raw_buffers = operation_data["raw_buffers"]
-        len_buffers = operation_data["len_buffers"]
+    s_data = serialize(operation_data)
 
-        h2_list = _isend_complex_data_impl(
-            comm, s_data, raw_buffers, len_buffers, dest_rank
-        )
-        handlers.extend(h2_list)
+    if not is_serialized:
+        s_data = serialize(s_data)
 
-        return handlers, None
-    else:
-        # Serialize and send the data
-        h2_list, s_data, raw_buffers, len_buffers = _isend_complex_data(
-            comm, operation_data, dest_rank
-        )
-        handlers.extend(h2_list)
-        return handlers, {
-            "s_data": s_data,
-            "raw_buffers": raw_buffers,
-            "len_buffers": len_buffers,
-        }
+    # Send message pack bytestring
+    h2 = mpi_isend_object(comm, s_data, dest_rank)
+    handlers.append((h2, None))
+    return handlers, s_data
 
 
 def send_remote_task_operation(comm, operation_type, operation_data, dest_rank):

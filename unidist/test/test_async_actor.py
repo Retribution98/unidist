@@ -204,8 +204,8 @@ def test_signal_actor():
 def test_pending_get():
     @unidist.remote
     class SlowActor:
-        async def slow_execute():
-            asyncio.sleep(5)
+        async def slow_execute(self):
+            await asyncio.sleep(5)
             return 1
 
     slow_actor = SlowActor.remote()
