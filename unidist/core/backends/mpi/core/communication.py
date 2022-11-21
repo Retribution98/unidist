@@ -307,9 +307,10 @@ def recv_complex_data(comm, source_rank):
         object
             Received data object from another MPI process.
     """
-    msgpack_buffer = mpi_busy_wait_recv(comm, source_rank)
+    # msgpack_buffer = mpi_busy_wait_recv(comm, source_rank)
+    s_data = comm.recv(source=source_rank)
     # Start unpacking
-    return deserialize(msgpack_buffer)
+    return deserialize(s_data)
 
 
 def send_complex_data(comm, data, dest_rank, is_serialized=False):

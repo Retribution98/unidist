@@ -56,13 +56,13 @@ def check_send_communication(comm, df, dest_rank):
 def check_recv_communication(comm, source_rank):
     comm.recv(source=source_rank, tag=1)
 
-    time_1 = time.time()
-    _ = recv_complex_data(comm, source_rank)
-    time_2 = time.time()
-
     time_3 = time.time()
     _ = comm.recv(source=source_rank)
     time_4 = time.time()
+
+    time_1 = time.time()
+    _ = recv_complex_data(comm, source_rank)
+    time_2 = time.time()
 
     print(f"Recv time:\t{time_2-time_1}\t{time_4-time_3}")
 
