@@ -430,7 +430,7 @@ def _isend_complex_data_impl(comm, s_data, raw_buffers, len_buffers, dest_rank):
         handlers.append((h2, join_array))
         if len(array_lengths) > 1:
             h3 = mpi_isend_object(comm, len(array_lengths), dest_rank)
-            h4 = mpi_isend_buffer(comm, array_lengths, dest_rank, type=MPI.INT)
+            h4 = mpi_isend_buffer(comm, np.array(array_lengths), dest_rank, type=MPI.INT)
             handlers.append((h3, None))
             handlers.append((h4, array_lengths))
             #TODO remove sending len_buffers

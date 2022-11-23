@@ -39,7 +39,7 @@ def check_serialize(df):
     print(f'Deserialization time:\t{time_3-time_2}]\t{time_6-time_5}\t{time_9-time_8}')
 
 
-@profile
+# @profile
 def check_send_communication(comm, df, dest_rank):
     comm.send("Start communication", dest=dest_rank, tag=1)
 
@@ -52,12 +52,12 @@ def check_send_communication(comm, df, dest_rank):
     time_4 = time.time()
 
     time_5 = time.time()
-    send_complex_data(comm, df, dest_rank, version=1)
+    send_complex_data(comm, df, dest_rank)
     time_6 = time.time()
 
     print(f'Send time:\t{time_2-time_1}\t{time_4-time_3}\t{time_6-time_5}')
 
-@profile
+# @profile
 def check_recv_communication(comm, source_rank):
     comm.recv(source=source_rank, tag=1)
 
@@ -70,7 +70,7 @@ def check_recv_communication(comm, source_rank):
     time_4 = time.time()
 
     time_5 = time.time()
-    result_3 = recv_complex_data(comm, source_rank, version=1)
+    result_3 = recv_complex_data(comm, source_rank)
     time_6 = time.time()
 
     print(f'Recv time:\t{time_2-time_1}\t{time_4-time_3}\t{time_6-time_5}')
