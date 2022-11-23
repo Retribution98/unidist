@@ -7,6 +7,7 @@
 from collections import defaultdict
 import socket
 import time
+import numpy as np
 
 try:
     import mpi4py
@@ -195,7 +196,7 @@ def mpi_isend_object(comm, data, dest_rank):
     return comm.isend(data, dest=dest_rank)
 
 
-def mpi_send_buffer(comm, buffer_size, buffer, dest_rank):
+def mpi_send_buffer(comm, buffer_size, buffer, dest_rank, type=MPI.CHAR):
     """
     Send buffer object to another MPI rank in a blocking way.
 
@@ -211,7 +212,7 @@ def mpi_send_buffer(comm, buffer_size, buffer, dest_rank):
         Target MPI process to transfer buffer.
     """
     comm.send(buffer_size, dest=dest_rank)
-    comm.Send([buffer, MPI.CHAR], dest=dest_rank)
+    comm.Send([buffer, type], dest=dest_rank)
 
 
 def mpi_recv_buffer(comm, source_rank):
@@ -236,7 +237,7 @@ def mpi_recv_buffer(comm, source_rank):
     return s_buffer
 
 
-def mpi_isend_buffer(comm, data, dest_rank):
+def mpi_isend_buffer(comm, data, dest_rank, type=MPI.CHAR):
     """
     Send buffer object to another MPI rank in a non-blocking way.
 
@@ -254,7 +255,7 @@ def mpi_isend_buffer(comm, data, dest_rank):
     object
         A handler to MPI_Isend communication result.
     """
-    return comm.Isend([data, MPI.CHAR], dest=dest_rank)
+    return comm.Isend([data, type], dest=dest_rank)
 
 
 def mpi_busy_wait_recv(comm, source_rank):
@@ -328,14 +329,29 @@ def _send_complex_data_impl(comm, s_data, raw_buffers, len_buffers, dest_rank):
     dest_rank : int
         Target MPI process to transfer data.
     """
-    # Send message pack bytestring
-    mpi_send_buffer(comm, len(s_data), s_data, dest_rank)
-    # Send the necessary metadata
-    mpi_send_object(comm, len(raw_buffers), dest_rank)
-    for raw_buffer in raw_buffers:
-        mpi_send_buffer(comm, len(raw_buffer.raw()), raw_buffer, dest_rank)
-    # TODO: do not send if raw_buffers is zero
-    mpi_send_object(comm, len_buffers, dest_rank)
+    try:
+        join_array = bytearray()
+        array_lengths = list()
+        join_array += s_data
+        array_lengths.append(len(s_data))
+        for raw_buffer in raw_buffers:
+            array_lengths.append(len(raw_buffer.raw()))
+            join_array += raw_buffer
+        
+        mpi_send_buffer(comm, len(join_array), join_array, dest_rank)
+        if len(array_lengths) > 1:
+            mpi_send_buffer(comm, len(array_lengths), np.array(array_lengths), dest_rank, type=MPI.INT)
+            #TODO remove sending len_buffers
+            mpi_send_object(comm, len_buffers, dest_rank)
+        else:
+            mpi_send_object(comm, len(array_lengths), dest_rank)
+            mpi_send_object(comm, len_buffers, dest_rank)
+    except Exception as ex:
+        logger.exception(ex)
+        raise ex
+
+
+
 
 
 def send_complex_data(comm, data, dest_rank):
@@ -399,25 +415,35 @@ def _isend_complex_data_impl(comm, s_data, raw_buffers, len_buffers, dest_rank):
         A list of pairs, ``MPI_Isend`` handler and associated data to send.
     """
     handlers = []
-
-    # Send message pack bytestring
-    h1 = mpi_isend_object(comm, len(s_data), dest_rank)
-    h2 = mpi_isend_buffer(comm, s_data, dest_rank)
-    handlers.append((h1, None))
-    handlers.append((h2, s_data))
-
-    # Send the necessary metadata
-    h3 = mpi_isend_object(comm, len(raw_buffers), dest_rank)
-    handlers.append((h3, None))
-    for raw_buffer in raw_buffers:
-        h4 = mpi_isend_object(comm, len(raw_buffer.raw()), dest_rank)
-        h5 = mpi_isend_buffer(comm, raw_buffer, dest_rank)
-        handlers.append((h4, None))
-        handlers.append((h5, raw_buffer))
-    # TODO: do not send if raw_buffers is zero
-    h6 = mpi_isend_object(comm, len_buffers, dest_rank)
-    handlers.append((h6, len_buffers))
-
+    try:
+        join_array = bytearray()
+        array_lengths = list()
+        join_array += s_data
+        array_lengths.append(len(s_data))
+        for raw_buffer in raw_buffers:
+            array_lengths.append(len(raw_buffer.raw()))
+            join_array += raw_buffer
+        
+        h1 = mpi_isend_object(comm, len(join_array), dest_rank)
+        h2 = mpi_isend_buffer(comm, join_array, dest_rank)
+        handlers.append((h1, None))
+        handlers.append((h2, join_array))
+        if len(array_lengths) > 1:
+            h3 = mpi_isend_object(comm, len(array_lengths), dest_rank)
+            h4 = mpi_isend_buffer(comm, array_lengths, dest_rank, type=MPI.INT)
+            handlers.append((h3, None))
+            handlers.append((h4, array_lengths))
+            #TODO remove sending len_buffers
+            h5 = mpi_isend_object(comm, len_buffers, dest_rank)
+            handlers.append((h5, len_buffers))
+        else:
+            h6 = mpi_isend_object(comm, len(array_lengths), dest_rank)
+            handlers.append((h6, array_lengths))
+            h7 = mpi_isend_object(comm, len_buffers, dest_rank)
+            handlers.append((h7, len_buffers))
+    except Exception as ex:
+        logger.exception(ex)
+        raise ex
     return handlers
 
 
@@ -482,32 +508,46 @@ def recv_complex_data(comm, source_rank):
     object
         Received data object from another MPI process.
     """
-    # Recv main message pack buffer.
-    # First MPI call uses busy wait loop to remove possible contention
-    # in a long running data receive operations.
-    buf_size = mpi_busy_wait_recv(comm, source_rank)
-    msgpack_buffer = bytearray(buf_size)
-    comm.Recv([msgpack_buffer, MPI.CHAR], source=source_rank)
+    try:
+        buf_size = mpi_busy_wait_recv(comm, source_rank)
+        msgpack_buffer = bytearray(buf_size)
+        comm.Recv([msgpack_buffer, MPI.CHAR], source=source_rank)
 
-    # Recv pickle buffers array for all complex data frames
-    raw_buffers_size = comm.recv(source=source_rank)
-    # Pre-allocate pickle buffers list
-    raw_buffers = [None] * raw_buffers_size
-    for i in range(raw_buffers_size):
+        msgpack_buffer_mv = memoryview(msgpack_buffer)
+
         buf_size = comm.recv(source=source_rank)
-        recv_buffer = bytearray(buf_size)
-        comm.Recv([recv_buffer, MPI.CHAR], source=source_rank)
-        raw_buffers[i] = recv_buffer
-    # Recv len of buffers for each complex data frames
-    len_buffers = comm.recv(source=source_rank)
+        raw_buffers = []
+        len_buffers = []
+        s_data = []
+        if buf_size > 1:
+            recv_buffer = np.zeros(buf_size).astype(int)
+            comm.Recv([recv_buffer, MPI.INT], source=source_rank)
+            len_buffers = comm.recv(source=source_rank)
 
-    # Set the necessary metadata for unpacking
-    deserializer = ComplexDataSerializer(raw_buffers, len_buffers)
+            start_index = 0
+            for i in range(buf_size):
+                new_end_index = start_index + recv_buffer[i]
+                buffer = msgpack_buffer_mv[start_index:new_end_index]
+                start_index = new_end_index
+                if i == 0:
+                    s_data = buffer
+                else:
+                    raw_buffers.append(buffer)
+        else:
+            s_data = msgpack_buffer_mv
+            len_buffers = comm.recv(source=source_rank)
 
-    # Start unpacking
-    return deserializer.deserialize(msgpack_buffer)
+         # Set the necessary metadata for unpacking
+        
+        deserializer = ComplexDataSerializer(raw_buffers, len_buffers)
+        logger.debug(s_data)
+        # Start unpacking
+        return deserializer.deserialize(s_data)
+    except Exception as ex:
+        logger.exception(ex)
+        raise ex
 
-
+        
 # ---------- #
 # Public API #
 # ---------- #
