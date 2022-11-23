@@ -20,8 +20,10 @@ if sys.version_info[1] < 8:  # check the minor Python version
 else:
     import pickle as pkl
 import cloudpickle as cpkl
-import msgpack
-import gc  # msgpack optimization
+
+from unidist.core.backends.mpi.core.common import get_logger
+
+logger = get_logger("serialization", "serialization.log")
 
 # Pickle 5 protocol compatible types check
 compatible_modules = ("pandas", "numpy")
@@ -70,174 +72,98 @@ def is_pickle5_serializable(data):
     bool
         ``True`` if the data should be serialized with pickle using protocol 5 (out-of-band data).
     """
-    is_serializable = False
     for module in available_modules:
-        if module.__name__ == "pandas":
-            is_serializable = isinstance(data, (module.DataFrame, module.Series))
-            break
-        elif module.__name__ == "numpy":
-            is_serializable = isinstance(data, module.ndarray)
-            break
-    return is_serializable
+        if module.__name__ == "pandas" and isinstance(
+            data, (module.DataFrame, module.Series)
+        ):
+            return True
+        elif module.__name__ == "numpy" and isinstance(data, module.ndarray):
+            return True
+
+    return False
 
 
-class ComplexDataSerializer:
+def _cpkl_encode(obj):
     """
-    Class for data serialization/de-serialization for MPI comminication.
+    Encode with cloudpickle library.
 
     Parameters
     ----------
-    buffers : list, default: None
-        A list of ``PickleBuffer`` objects for data decoding.
-    len_buffers : list, default: None
-        A list of buffer sizes for data decoding.
+    obj : object
+        Python object.
+
+    Returns
+    -------
+    dict
+        Dictionary with array of serialized bytes.
+    """
+    return {"__cloud_custom__": True, "as_bytes": cpkl.dumps(obj)}
+
+
+def serialize(data):
+    """
+    Serialize data to a byte array.
+
+    Parameters
+    ----------
+    data : object
+        Data to serialize.
 
     Notes
     -----
-    Uses a combination of msgpack, cloudpickle and pickle libraries
+    Uses msgpack, cloudpickle and pickle libraries.
     """
+    try:
+        if isinstance(data, tuple):
+            return tuple(serialize(el) for el in data)
+        if isinstance(data, list):
+            for i in range(len(data)):
+                data[i] = serialize(data[i])
+            return data
+        if type(data) == dict:
+            for key in data:
+                data[key] = serialize(data[key])
+            return data
+        if is_pickle5_serializable(data):
+            return data
+        if is_cpkl_serializable(data):
+            return _cpkl_encode(data)
+        return data
+    except Exception as ex:
+        logger.exception(ex)
+        raise ex
 
-    def __init__(self, buffers=None, len_buffers=None):
-        self.buffers = buffers if buffers else []
-        self.len_buffers = len_buffers if len_buffers else []
-        self._callback_counter = 0
 
-    def _buffer_callback(self, pickle_buffer):
-        """
-        Callback for pickle protocol 5 out-of-band data buffers collection.
+def deserialize(s_data):
+    """
+    De-serialize data from a bytearray.
 
-        Parameters
-        ----------
-        pickle_buffer: pickle.PickleBuffer
-            Pickle library buffer wrapper.
-        """
-        self.buffers.append(pickle_buffer)
-        self._callback_counter += 1
-        return False
+    Parameters
+    ----------
+    s_data : bytearray
+        Data to de-serialize.
 
-    def _dataframe_encode(self, frame):
-        """
-        Encode with pickle library using protocol 5.
-
-        Parameters
-        ----------
-        data : object
-            Pickle 5 serializable object (e.g. pandas DataFrame or NumPy array).
-
-        Returns
-        -------
-        dict
-            Dictionary with array of serialized bytes.
-        """
-        s_frame = pkl.dumps(frame, protocol=5, buffer_callback=self._buffer_callback)
-        self.len_buffers.append(self._callback_counter)
-        self._callback_counter = 0
-        return {"__pickle5_custom__": True, "as_bytes": s_frame}
-
-    def _cpkl_encode(self, obj):
-        """
-        Encode with cloudpickle library.
-
-        Parameters
-        ----------
-        obj : object
-            Python object.
-
-        Returns
-        -------
-        dict
-            Dictionary with array of serialized bytes.
-        """
-        return {"__cloud_custom__": True, "as_bytes": cpkl.dumps(obj)}
-
-    def _pkl_encode(self, obj):
-        """
-        Encode with pickle library.
-
-        Parameters
-        ----------
-        obj : object
-            Python object.
-
-        Returns
-        -------
-        dict
-            Dictionary with array of serialized bytes.
-        """
-        return {"__pickle_custom__": True, "as_bytes": pkl.dumps(obj)}
-
-    def _encode_custom(self, obj):
-        """
-        Serialization hook for msgpack library.
-
-        It encodes complex data types the library couldn`t handle.
-
-        Parameters
-        ----------
-        obj : object
-            Python object.
-        """
-        if is_pickle5_serializable(obj):
-            return self._dataframe_encode(obj)
-        elif is_cpkl_serializable(obj):
-            return self._cpkl_encode(obj)
-        else:
-            return self._pkl_encode(obj)
-
-    def serialize(self, data):
-        """
-        Serialize data to a byte array.
-
-        Parameters
-        ----------
-        data : object
-            Data to serialize.
-
-        Notes
-        -----
-        Uses msgpack, cloudpickle and pickle libraries.
-        """
-        return msgpack.packb(data, default=self._encode_custom)
-
-    def _decode_custom(self, obj):
-        """
-        De-serialization hook for msgpack library.
-
-        It decodes complex data types the library couldn`t handle.
-
-        Parameters
-        ----------
-        obj : object
-            Python object.
-        """
-        if "__cloud_custom__" in obj:
-            return cpkl.loads(obj["as_bytes"])
-        elif "__pickle_custom__" in obj:
-            return pkl.loads(obj["as_bytes"])
-        elif "__pickle5_custom__" in obj:
-            frame = pkl.loads(obj["as_bytes"], buffers=self.buffers)
-            del self.buffers[: self.len_buffers.pop(0)]
-            return frame
-        else:
-            return obj
-
-    def deserialize(self, s_data):
-        """
-        De-serialize data from a bytearray.
-
-        Parameters
-        ----------
-        s_data : bytearray
-            Data to de-serialize.
-
-        Notes
-        -----
-        Uses msgpack, cloudpickle and pickle libraries.
-        """
-        gc.disable()  # Performance optimization for msgpack
-        unpacked_data = msgpack.unpackb(s_data, object_hook=self._decode_custom)
-        gc.enable()
-        return unpacked_data
+    Notes
+    -----
+    Uses msgpack, cloudpickle and pickle libraries.
+    """
+    try:
+        if isinstance(s_data, tuple):
+            return tuple(deserialize(el) for el in s_data)
+        if isinstance(s_data, list):
+            for i in range(len(s_data)):
+                s_data[i] = deserialize(s_data[i])
+            return s_data
+        if type(s_data) == dict:
+            if "__cloud_custom__" in s_data:
+                return cpkl.loads(s_data["as_bytes"])
+            for key in s_data:
+                s_data[key] = deserialize(s_data[key])
+            return s_data
+        return s_data
+    except Exception as ex:
+        logger.exception(ex)
+        raise ex
 
 
 class SimpleDataSerializer:
