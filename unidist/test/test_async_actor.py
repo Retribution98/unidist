@@ -199,3 +199,19 @@ def test_signal_actor():
     object_refs = [func.remote(idx) for idx in range(CpuCount.get())]
 
     assert_equal(object_refs, list(range(CpuCount.get())))
+
+def test_pending_get():
+    @unidist.remote
+    class SlowActor:
+        async def slow_execute(self):
+            await asyncio.sleep(5)
+            return 1
+
+    slow_actor = SlowActor.remote()
+    slow_result = unidist.get(slow_actor.slow_execute.remote())
+
+    @unidist.remote
+    def g():
+        return slow_result + 1
+
+    assert_equal(g.remote(), 2)
