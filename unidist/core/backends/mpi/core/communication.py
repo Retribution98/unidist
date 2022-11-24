@@ -7,7 +7,6 @@
 from collections import defaultdict
 import socket
 import time
-import numpy as np
 
 try:
     import mpi4py
@@ -312,7 +311,7 @@ def recv_operation_type(comm):
 # --------------------------------- #
 
 
-def _send_complex_data_impl(comm, s_data, raw_buffers, len_buffers, dest_rank):
+def _send_complex_data_impl(comm, s_data, raw_buffers, dest_rank):
     """
     Send already serialized complex data.
 
@@ -324,8 +323,6 @@ def _send_complex_data_impl(comm, s_data, raw_buffers, len_buffers, dest_rank):
         Serialized data as bytearray.
     raw_buffers : list
         Pickle buffers list, out-of-band data collected with pickle 5 protocol.
-    len_buffers : list
-        Size of each buffer from `raw_buffers` list.
     dest_rank : int
         Target MPI process to transfer data.
     """
@@ -337,21 +334,12 @@ def _send_complex_data_impl(comm, s_data, raw_buffers, len_buffers, dest_rank):
         for raw_buffer in raw_buffers:
             array_lengths.append(len(raw_buffer.raw()))
             join_array += raw_buffer
-        
+
         mpi_send_buffer(comm, len(join_array), join_array, dest_rank)
-        if len(array_lengths) > 1:
-            mpi_send_buffer(comm, len(array_lengths), np.array(array_lengths), dest_rank, type=MPI.INT)
-            #TODO remove sending len_buffers
-            mpi_send_object(comm, len_buffers, dest_rank)
-        else:
-            mpi_send_object(comm, len(array_lengths), dest_rank)
-            mpi_send_object(comm, len_buffers, dest_rank)
+        mpi_send_object(comm, array_lengths, dest_rank)
     except Exception as ex:
         logger.exception(ex)
         raise ex
-
-
-
 
 
 def send_complex_data(comm, data, dest_rank):
@@ -381,16 +369,15 @@ def send_complex_data(comm, data, dest_rank):
     s_data = serializer.serialize(data)
     # Retrive the metadata
     raw_buffers = serializer.buffers
-    len_buffers = serializer.len_buffers
 
     # MPI comminucation
-    _send_complex_data_impl(comm, s_data, raw_buffers, len_buffers, dest_rank)
+    _send_complex_data_impl(comm, s_data, raw_buffers, dest_rank)
 
     # For caching purpose
-    return s_data, raw_buffers, len_buffers
+    return s_data, raw_buffers
 
 
-def _isend_complex_data_impl(comm, s_data, raw_buffers, len_buffers, dest_rank):
+def _isend_complex_data_impl(comm, s_data, raw_buffers, dest_rank):
     """
     Send serialized complex data.
 
@@ -404,8 +391,6 @@ def _isend_complex_data_impl(comm, s_data, raw_buffers, len_buffers, dest_rank):
         A serialized msgpack data.
     raw_buffers : list
         A list of pickle buffers.
-    len_buffers : list
-        A list of buffers amount for each object.
     dest_rank : int
         Target MPI process to transfer data.
 
@@ -423,24 +408,13 @@ def _isend_complex_data_impl(comm, s_data, raw_buffers, len_buffers, dest_rank):
         for raw_buffer in raw_buffers:
             array_lengths.append(len(raw_buffer.raw()))
             join_array += raw_buffer
-        
+
         h1 = mpi_isend_object(comm, len(join_array), dest_rank)
-        h2 = mpi_isend_buffer(comm, join_array, dest_rank)
         handlers.append((h1, None))
+        h2 = mpi_isend_buffer(comm, join_array, dest_rank)
         handlers.append((h2, join_array))
-        if len(array_lengths) > 1:
-            h3 = mpi_isend_object(comm, len(array_lengths), dest_rank)
-            h4 = mpi_isend_buffer(comm, np.array(array_lengths), dest_rank, type=MPI.INT)
-            handlers.append((h3, None))
-            handlers.append((h4, array_lengths))
-            #TODO remove sending len_buffers
-            h5 = mpi_isend_object(comm, len_buffers, dest_rank)
-            handlers.append((h5, len_buffers))
-        else:
-            h6 = mpi_isend_object(comm, len(array_lengths), dest_rank)
-            handlers.append((h6, array_lengths))
-            h7 = mpi_isend_object(comm, len_buffers, dest_rank)
-            handlers.append((h7, len_buffers))
+        h3 = mpi_isend_object(comm, array_lengths, dest_rank)
+        handlers.append((h3, array_lengths))
     except Exception as ex:
         logger.exception(ex)
         raise ex
@@ -480,14 +454,11 @@ def _isend_complex_data(comm, data, dest_rank):
     s_data = serializer.serialize(data)
     # Retrive the metadata
     raw_buffers = serializer.buffers
-    len_buffers = serializer.len_buffers
 
     # Send message pack bytestring
-    handlers.extend(
-        _isend_complex_data_impl(comm, s_data, raw_buffers, len_buffers, dest_rank)
-    )
+    handlers.extend(_isend_complex_data_impl(comm, s_data, raw_buffers, dest_rank))
 
-    return handlers, s_data, raw_buffers, len_buffers
+    return handlers, s_data, raw_buffers
 
 
 def recv_complex_data(comm, source_rank):
@@ -510,36 +481,28 @@ def recv_complex_data(comm, source_rank):
     """
     try:
         buf_size = mpi_busy_wait_recv(comm, source_rank)
-        msgpack_buffer = bytearray(buf_size)
-        comm.Recv([msgpack_buffer, MPI.CHAR], source=source_rank)
+        joined_array = bytearray(buf_size)
+        comm.Recv([joined_array, MPI.CHAR], source=source_rank)
 
-        msgpack_buffer_mv = memoryview(msgpack_buffer)
+        joined_array_mv = memoryview(joined_array)
 
-        buf_size = comm.recv(source=source_rank)
+        buffer_lengths = comm.recv(source=source_rank)
         raw_buffers = []
-        len_buffers = []
         s_data = []
-        if buf_size > 1:
-            recv_buffer = np.zeros(buf_size).astype(int)
-            comm.Recv([recv_buffer, MPI.INT], source=source_rank)
-            len_buffers = comm.recv(source=source_rank)
+        start_index = 0
 
-            start_index = 0
-            for i in range(buf_size):
-                new_end_index = start_index + recv_buffer[i]
-                buffer = msgpack_buffer_mv[start_index:new_end_index]
-                start_index = new_end_index
-                if i == 0:
-                    s_data = buffer
-                else:
-                    raw_buffers.append(buffer)
-        else:
-            s_data = msgpack_buffer_mv
-            len_buffers = comm.recv(source=source_rank)
+        for i in range(len(buffer_lengths)):
+            new_end_index = start_index + buffer_lengths[i]
+            buffer = joined_array_mv[start_index:new_end_index]
+            start_index = new_end_index
+            if i == 0:
+                s_data = buffer
+            else:
+                raw_buffers.append(buffer)
 
-         # Set the necessary metadata for unpacking
-        
-        deserializer = ComplexDataSerializer(raw_buffers, len_buffers)
+        # Set the necessary metadata for unpacking
+
+        deserializer = ComplexDataSerializer(raw_buffers)
         logger.debug(s_data)
         # Start unpacking
         return deserializer.deserialize(s_data)
@@ -547,7 +510,7 @@ def recv_complex_data(comm, source_rank):
         logger.exception(ex)
         raise ex
 
-        
+
 # ---------- #
 # Public API #
 # ---------- #
@@ -656,18 +619,14 @@ def send_operation_data(comm, operation_data, dest_rank, is_serialized=False):
         # Send already serialized data
         s_data = operation_data["s_data"]
         raw_buffers = operation_data["raw_buffers"]
-        len_buffers = operation_data["len_buffers"]
-        _send_complex_data_impl(comm, s_data, raw_buffers, len_buffers, dest_rank)
+        _send_complex_data_impl(comm, s_data, raw_buffers, dest_rank)
         return None
     else:
         # Serialize and send the data
-        s_data, raw_buffers, len_buffers = send_complex_data(
-            comm, operation_data, dest_rank
-        )
+        s_data, raw_buffers = send_complex_data(comm, operation_data, dest_rank)
         return {
             "s_data": s_data,
             "raw_buffers": raw_buffers,
-            "len_buffers": len_buffers,
         }
 
 
@@ -753,24 +712,20 @@ def isend_complex_operation(
         # Send already serialized data
         s_data = operation_data["s_data"]
         raw_buffers = operation_data["raw_buffers"]
-        len_buffers = operation_data["len_buffers"]
 
-        h2_list = _isend_complex_data_impl(
-            comm, s_data, raw_buffers, len_buffers, dest_rank
-        )
+        h2_list = _isend_complex_data_impl(comm, s_data, raw_buffers, dest_rank)
         handlers.extend(h2_list)
 
         return handlers, None
     else:
         # Serialize and send the data
-        h2_list, s_data, raw_buffers, len_buffers = _isend_complex_data(
+        h2_list, s_data, raw_buffers = _isend_complex_data(
             comm, operation_data, dest_rank
         )
         handlers.extend(h2_list)
         return handlers, {
             "s_data": s_data,
             "raw_buffers": raw_buffers,
-            "len_buffers": len_buffers,
         }
 
 
