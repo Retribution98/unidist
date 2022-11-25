@@ -7,7 +7,6 @@
 from collections import defaultdict
 import socket
 import time
-import numpy as np
 
 try:
     import mpi4py
@@ -339,19 +338,10 @@ def _send_complex_data_impl(comm, s_data, raw_buffers, len_buffers, dest_rank):
             join_array += raw_buffer
         
         mpi_send_buffer(comm, len(join_array), join_array, dest_rank)
-        if len(array_lengths) > 1:
-            mpi_send_buffer(comm, len(array_lengths), np.array(array_lengths), dest_rank, type=MPI.INT)
-            #TODO remove sending len_buffers
-            mpi_send_object(comm, len_buffers, dest_rank)
-        else:
-            mpi_send_object(comm, len(array_lengths), dest_rank)
-            mpi_send_object(comm, len_buffers, dest_rank)
+        mpi_send_object(comm, (array_lengths, len_buffers), dest_rank)
     except Exception as ex:
         logger.exception(ex)
         raise ex
-
-
-
 
 
 def send_complex_data(comm, data, dest_rank):
@@ -425,22 +415,11 @@ def _isend_complex_data_impl(comm, s_data, raw_buffers, len_buffers, dest_rank):
             join_array += raw_buffer
         
         h1 = mpi_isend_object(comm, len(join_array), dest_rank)
-        h2 = mpi_isend_buffer(comm, join_array, dest_rank)
         handlers.append((h1, None))
+        h2 = mpi_isend_buffer(comm, join_array, dest_rank)
         handlers.append((h2, join_array))
-        if len(array_lengths) > 1:
-            h3 = mpi_isend_object(comm, len(array_lengths), dest_rank)
-            h4 = mpi_isend_buffer(comm, np.array(array_lengths), dest_rank, type=MPI.INT)
-            handlers.append((h3, None))
-            handlers.append((h4, array_lengths))
-            #TODO remove sending len_buffers
-            h5 = mpi_isend_object(comm, len_buffers, dest_rank)
-            handlers.append((h5, len_buffers))
-        else:
-            h6 = mpi_isend_object(comm, len(array_lengths), dest_rank)
-            handlers.append((h6, array_lengths))
-            h7 = mpi_isend_object(comm, len_buffers, dest_rank)
-            handlers.append((h7, len_buffers))
+        h3 = mpi_isend_object(comm, (array_lengths, len_buffers), dest_rank)
+        handlers.append((h3, array_lengths))
     except Exception as ex:
         logger.exception(ex)
         raise ex
@@ -510,32 +489,24 @@ def recv_complex_data(comm, source_rank):
     """
     try:
         buf_size = mpi_busy_wait_recv(comm, source_rank)
-        msgpack_buffer = bytearray(buf_size)
-        comm.Recv([msgpack_buffer, MPI.CHAR], source=source_rank)
+        joined_array = bytearray(buf_size)
+        comm.Recv([joined_array, MPI.CHAR], source=source_rank)
 
-        msgpack_buffer_mv = memoryview(msgpack_buffer)
+        joined_array_mv = memoryview(joined_array)
 
-        buf_size = comm.recv(source=source_rank)
+        buffer_lengths, len_buffers = comm.recv(source=source_rank)
         raw_buffers = []
-        len_buffers = []
         s_data = []
-        if buf_size > 1:
-            recv_buffer = np.zeros(buf_size).astype(int)
-            comm.Recv([recv_buffer, MPI.INT], source=source_rank)
-            len_buffers = comm.recv(source=source_rank)
+        start_index = 0
 
-            start_index = 0
-            for i in range(buf_size):
-                new_end_index = start_index + recv_buffer[i]
-                buffer = msgpack_buffer_mv[start_index:new_end_index]
-                start_index = new_end_index
-                if i == 0:
-                    s_data = buffer
-                else:
-                    raw_buffers.append(buffer)
-        else:
-            s_data = msgpack_buffer_mv
-            len_buffers = comm.recv(source=source_rank)
+        for i in range(len(buffer_lengths)):
+            new_end_index = start_index + buffer_lengths[i]
+            buffer = joined_array_mv[start_index:new_end_index]
+            start_index = new_end_index
+            if i == 0:
+                s_data = buffer
+            else:
+                raw_buffers.append(buffer)
 
          # Set the necessary metadata for unpacking
         
