@@ -89,14 +89,17 @@ class ComplexDataSerializer:
     ----------
     buffers : list, default: None
         A list of ``PickleBuffer`` objects for data decoding.
+    len_buffers : list, default: None
+        A list of buffer sizes for data decoding.
 
     Notes
     -----
     Uses a combination of msgpack, cloudpickle and pickle libraries
     """
 
-    def __init__(self, buffers=None):
+    def __init__(self, buffers=None, len_buffers=None):
         self.buffers = buffers if buffers else []
+        self.len_buffers = len_buffers if len_buffers else []
         self._callback_counter = 0
 
     def _buffer_callback(self, pickle_buffer):
@@ -127,6 +130,7 @@ class ComplexDataSerializer:
             Dictionary with array of serialized bytes.
         """
         s_frame = pkl.dumps(frame, protocol=5, buffer_callback=self._buffer_callback)
+        self.len_buffers.append(self._callback_counter)
         self._callback_counter = 0
         return {"__pickle5_custom__": True, "as_bytes": s_frame}
 
@@ -212,7 +216,7 @@ class ComplexDataSerializer:
             return pkl.loads(obj["as_bytes"])
         elif "__pickle5_custom__" in obj:
             frame = pkl.loads(obj["as_bytes"], buffers=self.buffers)
-            del self.buffers[:]
+            del self.buffers[: self.len_buffers.pop(0)]
             return frame
         else:
             return obj
