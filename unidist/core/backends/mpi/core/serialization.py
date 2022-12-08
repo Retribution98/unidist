@@ -8,6 +8,7 @@ import importlib
 import inspect
 import sys
 from collections.abc import KeysView
+from mpi4py.MPI import memory
 
 # Serialization libraries
 if sys.version_info[1] < 8:  # check the minor Python version
@@ -114,7 +115,8 @@ class ComplexDataSerializer:
         pickle_buffer: pickle.PickleBuffer
             Pickle library buffer wrapper.
         """
-        if len(pickle_buffer.raw()) > self.THRESHOLD:
+        pickle_buffer = memory(pickle_buffer)
+        if len(pickle_buffer) > self.THRESHOLD:
             self.buffers.append(pickle_buffer)
             self._callback_counter += 1
             return False
