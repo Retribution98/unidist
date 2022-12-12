@@ -99,6 +99,7 @@ class ComplexDataSerializer:
     def __init__(self, buffers=None, len_buffers=None):
         self.buffers = buffers if buffers else bytearray()
         self.len_buffers = len_buffers if len_buffers else []
+        self.last_index = 0
 
     def _buffer_callback(self, pickle_buffer):
         """
@@ -109,8 +110,8 @@ class ComplexDataSerializer:
         pickle_buffer: pickle.PickleBuffer
             Pickle library buffer wrapper.
         """
-        self.buffers += pickle_buffer
-        self.len_buffers[-1].append(len(pickle_buffer))
+        self.buffers += pickle_buffer.raw()
+        self.len_buffers[-1].append(len(pickle_buffer.raw()))
         return False
 
     def _dataframe_encode(self, frame):
@@ -194,6 +195,7 @@ class ComplexDataSerializer:
         -----
         Uses msgpack, cloudpickle and pickle libraries.
         """
+        self.len_buffers.append([])
         return msgpack.packb(data, default=self._encode_custom)
 
     def _decode_custom(self, obj):
@@ -214,12 +216,11 @@ class ComplexDataSerializer:
         elif "__pickle5_custom__" in obj:
             buffer_mv = memoryview(self.buffers)
             buffers = []
-            last_index = 0
-            for buf_len in self.len_buffers[0]:
-                buffers.append(buffer_mv[last_index : last_index + buf_len])
-                last_index += buf_len
+            if len(self.len_buffers) > 0:
+                for buf_len in self.len_buffers.pop(0):
+                    buffers.append(buffer_mv[self.last_index : self.last_index + buf_len])
+                    self.last_index += buf_len
             frame = pkl.loads(obj["as_bytes"], buffers=buffers)
-            del self.buffers[: self.len_buffers.pop(0)]
             return frame
         else:
             return obj

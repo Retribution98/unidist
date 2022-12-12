@@ -332,9 +332,9 @@ def _send_complex_data_impl(comm, s_data, raw_buffers, len_buffers, dest_rank):
     len_raw_buffers = len(raw_buffers)
     if len_raw_buffers > 0:
         mpi_send_buffer(comm, len_raw_buffers, raw_buffers, dest_rank)
-        mpi_send_object(comm, len_buffers, dest_rank)
     else:
         mpi_send_object(comm, len_raw_buffers, dest_rank)
+    mpi_send_object(comm, len_buffers, dest_rank)
 
 
 def send_complex_data(comm, data, dest_rank):
@@ -410,8 +410,8 @@ def _isend_complex_data_impl(comm, s_data, raw_buffers, len_buffers, dest_rank):
     if len_raw_buffers > 0:
         h4 = mpi_isend_buffer(comm, raw_buffers, dest_rank)
         handlers.append((h4, raw_buffers))
-        h5 = mpi_isend_object(comm, len_buffers, dest_rank)
-        handlers.append((h5, len_buffers))
+    h5 = mpi_isend_object(comm, len_buffers, dest_rank)
+    handlers.append((h5, len_buffers))
     return handlers
 
 
@@ -486,9 +486,7 @@ def recv_complex_data(comm, source_rank):
     if len_raw_buffers > 0:
         raw_buffers = bytearray(len_raw_buffers)
         comm.Recv([raw_buffers, MPI.CHAR], source=source_rank)
-        buf_size = comm.recv(source=source_rank)
-        len_buffers = bytearray(buf_size)
-        comm.Recv([len_buffers, MPI.CHAR], source=source_rank)
+    len_buffers = comm.recv(source=source_rank)
 
     # Set the necessary metadata for unpacking
     deserializer = ComplexDataSerializer(raw_buffers, len_buffers)
