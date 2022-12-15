@@ -187,8 +187,7 @@ class _BigMPI:
         cache.clear()
 
     def __call__(self, buf):
-        # buf = MPI.memory(buf)
-        # count = len(buf)
+        buf = MPI.memory(buf)
         count = len(buf)
         blocksize = self.blocksize
         if count < blocksize:
@@ -378,7 +377,7 @@ def _send_complex_data_impl(comm, s_data, raw_buffers, len_buffers, dest_rank):
     info = {
         "data_len": len(s_data),
         "len_buffers": len_buffers,
-        "len_raw_buffers": [len(sbuf.raw()) for sbuf in raw_buffers],
+        "len_raw_buffers": [len(MPI.memory(sbuf)) for sbuf in raw_buffers],
     }
 
     comm.send(info, dest=dest_rank)
@@ -452,7 +451,7 @@ def _isend_complex_data_impl(comm, s_data, raw_buffers, len_buffers, dest_rank):
     info = {
         "data_len": len(s_data),
         "len_buffers": len_buffers,
-        "len_raw_buffers": [len(sbuf.raw()) for sbuf in raw_buffers],
+        "len_raw_buffers": [len(MPI.memory(sbuf)) for sbuf in raw_buffers],
     }
 
     h1 = comm.isend(info, dest=dest_rank)
