@@ -5,6 +5,7 @@
 """Worker MPI process task processing functionality."""
 import asyncio
 from functools import wraps, partial
+import time
 
 try:
     import mpi4py
@@ -30,6 +31,7 @@ mpi_state = communication.MPIState.get_instance()
 # we use the condition to set "worker_0.log" in order to build it succesfully.
 log_file = "worker_{}.log".format(mpi_state.rank if mpi_state is not None else 0)
 w_logger = common.get_logger("worker", log_file)
+bench_logger = common.get_logger("bench", "bench.csv", True)
 
 # Actors map {handle : actor}
 actor_map = {}
@@ -111,11 +113,14 @@ async def worker_loop():
             )
 
         elif operation_type == common.Operation.PUT_DATA:
+            time_1 = time.time()
             request = communication.recv_complex_data(mpi_state.comm, source_rank)
+            object_store.put(request["id"], request["data"])
+            time_2 = time.time()
+            bench_logger.debug(f'get,{len(request["data"])},{time_1},{time_2}')
             w_logger.debug(
                 "PUT (RECV) {} id from {} rank".format(request["id"]._id, source_rank)
             )
-            object_store.put(request["id"], request["data"])
 
             # Clear cached request to another worker, if data_id became available
             request_store.clear_cache(request["id"])

@@ -24,6 +24,7 @@ def f(args):
         data = ray.get(arg)
         time_2 = time.time()
         times.append((time_1, time_2))
+        np.max(arg)
     return times
     
 

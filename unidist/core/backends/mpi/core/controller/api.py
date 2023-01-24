@@ -8,6 +8,7 @@ import sys
 import atexit
 import signal
 import asyncio
+import time
 from collections import defaultdict
 
 try:
@@ -43,6 +44,7 @@ from mpi4py import MPI  # noqa: E402
 
 
 logger = common.get_logger("api", "api.log")
+bench_logger = common.get_logger("bench", "bench.csv", True)
 
 # The topology of MPI cluster gets available when MPI initialization in `init`
 topology = dict()
@@ -381,8 +383,12 @@ def submit(task, *args, num_returns=1, **kwargs):
     unwrapped_args = [common.unwrap_data_ids(arg) for arg in args]
     unwrapped_kwargs = {k: common.unwrap_data_ids(v) for k, v in kwargs.items()}
 
+    time_1 = time.time()
     push_data(dest_rank, unwrapped_args)
     push_data(dest_rank, unwrapped_kwargs)
+    time_2 = time.time()
+    bench_logger.debug(f'put,{time_1},{time_2}')
+    
 
     operation_type = common.Operation.EXECUTE
     operation_data = {
