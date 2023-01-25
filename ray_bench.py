@@ -1,100 +1,91 @@
 import numpy as np
+import pandas as pd
+import os
 import ray
 import time
+import asyncio
+import sys
+from bench_utils import print_times
 
 sizes = [
-    1024 * 50,
-    1024 * 150,
-    1024 * 300,
+    1024 * 64,
+    1024 * 128,
+    1024 * 512,
     1024**2,
-    1024**2 * 100,
-    1024**2 * 500,
+    1024**2 * 128,
+    1024**2 * 512,
     int(1024**3 * 1.5)
 ]
+type_size=8
+sizes = [s // type_size for s in sizes]
 iterations_count = 3
-
-ray.init()
 times = {}
 
+times["init_before"] = time.time()
+ray.init()
+times["init_after"] = time.time()
+
 @ray.remote
-def f(args):
-    times = []
-    for arg in args:
-        time_1 = time.time()
-        data = ray.get(arg)
-        time_2 = time.time()
-        times.append((time_1, time_2))
-        np.max(arg)
-    return times
+def f(df_ref):
+    time_1 = time.time()
+    df = ray.get(df_ref[0])
+    time_2 = time.time()
+    df.min()
+    time_3 = time.time()
+    max_value = df.max()
+    time_4 = time.time()
+    return max_value, [time_1, time_2, time_3, time_4], os.getpid()
+
+
+def process_result(times, pids, size, i, result_ref):
+    times[f"get_result_{str(size)}_{i}_before"] = time.time()
+    result, get_times, pid = ray.get(result_ref)
+    times[f"get_result_{str(size)}_{i}_after"] = time.time()
     
-
-for size in sizes:
-    args = []
-    for i in range(iterations_count):
-        data = np.zeros(size)
-        times[f"put_{str(size)}_{i}_before"] = time.time()
-        entity = ray.put(data)
-        times[f"put_{str(size)}_{i}_after"] = time.time()
-        args.append(entity)
+    times[f"get_{str(size)}_{i}_before"] = get_times[0]
+    times[f"get_{str(size)}_{i}_after"] = get_times[1]
     
-    get_times = ray.get(f.remote(args))
-    for i in range(iterations_count):
-        t = get_times[i]
-        times[f"get_{str(size)}_{i}_before"] = t[0]
-        times[f"get_{str(size)}_{i}_after"] = t[1]
-
-
-#############################################################
-# PRINT RESULT                                              #
-#############################################################
-
-#header
-def get_size_name(size):
-    degree = 0
-    while size >= 1024:
-        degree += 1
-        size = size / 1024
-    postfix = ""
-    if degree == 0:
-        postfix = "B"
-    elif degree == 1:
-        postfix = "KB"
-    elif degree == 2:
-        postfix = "MB"
-    elif degree == 3:
-        postfix = "GB"
-    elif degree == 4:
-        postfix = "TB"
-    if size % 1 > 0:
-        size = "%.2f" % size
-    else:
-        size = str(int(size))
-    return f'{size} {postfix}'
-
-print(f'\t| {" | ".join([get_size_name(size).ljust(7) for size in sizes])} |')
-print(f'{"-"*8}|{"|".join(["-"*9 for _ in sizes])}|')
-
-
-#body
-commands = ["put", "get"]
-for command in commands:
-    for i in range(iterations_count):
-        time_array = []
-        for size in sizes:
-            name_patern = f'{command}_{str(size)}_{i}'
-            time_diff = times[f'{name_patern}_after'] - times[f'{name_patern}_before']
-            time_array.append(time_diff)
-        first_column = ""
-        if i == 0:
-            first_column = command.upper()
-        print(f'{first_column}\t| {" | ".join("{:.5f}".format(t)[:7] for t in time_array)} |')
-
-    average_times = []
+    times[f"corr_{str(size)}_{i}_before"] = get_times[1]
+    times[f"corr_{str(size)}_{i}_after"] = get_times[2]
+    
+    times[f"max_{str(size)}_{i}_before"] = get_times[2]
+    times[f"max_{str(size)}_{i}_after"] = get_times[3]
+    
+    pids.append(pid)
+    
+def main(sizes, iterations_count, times):
     for size in sizes:
-        average_times.append(np.average(
-            [times[f"{command}_{str(size)}_{i}_after"] - times[f"{command}_{str(size)}_{i}_before"]
-            for i in range(iterations_count)]
-        ))
-    print(f'\t|{"|".join(["-"*9 for _ in sizes])}|')
-    print(f'AVERAGE | {" | ".join("{:.5f}".format(t)[:7] for t in average_times)} |')
-    print(f'{"-"*8}|{"|".join(["-"*9 for _ in sizes])}|')
+        args = []
+        data = pd.DataFrame({i: list(range(1024)) for i in range(size // 1024)})
+        memory_size = sys.getsizeof(data)
+        print(f'SIZE: {size} = {memory_size}B')
+        for i in range(iterations_count):
+            times[f"put_{str(size)}_{i}_before"] = time.time()
+            entity = ray.put(data)
+            times[f"put_{str(size)}_{i}_after"] = time.time()
+            args.append(entity)
+
+        pids = []
+        result_refs = []
+        for i in range(iterations_count):
+            times[f"remote_{str(size)}_{i}_before"] = time.time()
+            result_ref = f.remote([args[i]])
+            times[f"remote_{str(size)}_{i}_after"] = time.time()
+            result_refs.append(result_ref)
+
+        for i in range(iterations_count):
+            process_result(times, pids, size, i, result_refs[i])
+
+        print(f'PIDS: {pids}')
+        if len(set(pids)) != len(pids):
+            print('Not different PIDs!')
+
+
+main(sizes, iterations_count, times)
+
+
+#####################################################################
+# Print results                                                     #
+#####################################################################
+
+print_times(times, sizes, type_size, iterations_count)

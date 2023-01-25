@@ -117,7 +117,7 @@ async def worker_loop():
             request = communication.recv_complex_data(mpi_state.comm, source_rank)
             object_store.put(request["id"], request["data"])
             time_2 = time.time()
-            bench_logger.debug(f'get,{len(request["data"])},{time_1},{time_2}')
+            bench_logger.debug(f'get,{request["data"].size},{time_1},{time_2}')
             w_logger.debug(
                 "PUT (RECV) {} id from {} rank".format(request["id"]._id, source_rank)
             )

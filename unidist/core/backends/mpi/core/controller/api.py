@@ -9,6 +9,7 @@ import atexit
 import signal
 import asyncio
 import time
+import pandas as pd
 from collections import defaultdict
 
 try:
@@ -387,8 +388,11 @@ def submit(task, *args, num_returns=1, **kwargs):
     push_data(dest_rank, unwrapped_args)
     push_data(dest_rank, unwrapped_kwargs)
     time_2 = time.time()
-    bench_logger.debug(f'put,{time_1},{time_2}')
-    
+    obj = object_store.get(unwrapped_args[0][0])
+    if isinstance(obj, pd.DataFrame):
+        bench_logger.debug(f'put,{obj.size},{time_1},{time_2}')
+    else:
+        bench_logger.debug(unwrapped_args[0])
 
     operation_type = common.Operation.EXECUTE
     operation_data = {
