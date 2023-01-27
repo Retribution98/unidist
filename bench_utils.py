@@ -1,11 +1,9 @@
 import numpy as np
 
-def print_times(times, sizes, type_size, iterations_count):
+def print_times(times, sizes, type_size, iterations_count, command_list=[]):
     """
     Print time results
     """
-    sizes = [size * type_size for size in sizes]
-
     #header
     first_column_width = 10
     def get_size_name(size):
@@ -30,13 +28,13 @@ def print_times(times, sizes, type_size, iterations_count):
             size = str(int(size))
         return f'{size} {postfix}'
 
-    print(f'{" "*first_column_width}| {" | ".join([get_size_name(size).ljust(7) for size in sizes])} |')
+    print(f'{" "*first_column_width}| {" | ".join([get_size_name(size * type_size).ljust(7) for size in sizes])} |')
     print(f'{"-"*first_column_width}|{"|".join(["-"*9 for _ in sizes])}|')
 
 
     #body
     commands = ["init", "put", "get", "remote", "get_result", "corr", "max"]
-    for command in commands:
+    for command in command_list:
         for i in range(iterations_count):
             time_array = []
             for size in sizes:

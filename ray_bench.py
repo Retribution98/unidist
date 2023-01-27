@@ -56,7 +56,8 @@ def process_result(times, pids, size, i, result_ref):
 def main(sizes, iterations_count, times):
     for size in sizes:
         args = []
-        data = pd.DataFrame({i: list(range(1024)) for i in range(size // 1024)})
+        # data = pd.DataFrame({i: list(range(1024)) for i in range(size // 1024)})
+        data = np.array(size)
         memory_size = sys.getsizeof(data)
         print(f'SIZE: {size} = {memory_size}B')
         for i in range(iterations_count):
@@ -88,4 +89,4 @@ main(sizes, iterations_count, times)
 # Print results                                                     #
 #####################################################################
 
-print_times(times, sizes, type_size, iterations_count)
+print_times(times, sizes, type_size, iterations_count, ["init", "put", "get", "remote", "get_result", "corr", "max"])

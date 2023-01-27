@@ -3,6 +3,7 @@ import unidist
 import time
 import os
 import asyncio
+import sys
 from collections import defaultdict
 from bench_utils import print_times
 
@@ -55,10 +56,10 @@ def process_result(times, pids, size, i, result_ref):
 def main(sizes, iterations_count, times):
     for size in sizes:
         args = []
-        data = pd.DataFrame({i: list(range(size // 1024)) for i in range(1024)})
         memory_size = sys.getsizeof(data)
         print(f'SIZE: {size} = {memory_size}B')
         for i in range(iterations_count):
+            data = pd.DataFrame({i: list(range(size // 1024)) for i in range(1024)})
             times[f"unidist.put_{str(size)}_{i}_before"] = time.time()
             entity = unidist.put(data)
             times[f"unidist.put_{str(size)}_{i}_after"] = time.time()
