@@ -28,6 +28,7 @@ from unidist.core.backends.mpi.core.controller.common import (
 )
 import unidist.core.backends.mpi.core.common as common
 import unidist.core.backends.mpi.core.communication as communication
+from unidist.core.backends.mpi.core.async_operations import AsyncOperations
 from unidist.config import (
     CpuCount,
     IsMpiSpawnWorkers,
@@ -183,6 +184,8 @@ def shutdown():
     for rank_id in range(communication.MPIRank.MONITOR, mpi_state.world_size):
         communication.mpi_send_object(mpi_state.comm, common.Operation.CANCEL, rank_id)
         logger.debug("Shutdown rank {}".format(rank_id))
+    async_operations = AsyncOperations.get_instance()
+    async_operations.finish()
     if not MPI.Is_finalized():
         MPI.Finalize()
 
@@ -391,12 +394,14 @@ def submit(task, *args, num_returns=1, **kwargs):
         "kwargs": unwrapped_kwargs,
         "output": common.master_data_ids_to_base(output_ids),
     }
-    communication.send_remote_task_operation(
+    async_operations = AsyncOperations.get_instance()
+    h_list, _ = communication.isend_complex_operation(
         communication.MPIState.get_instance().comm,
         operation_type,
         operation_data,
         dest_rank,
     )
+    async_operations.extend(h_list)
 
     # Track the task execution
     garbage_collector.increment_task_counter()

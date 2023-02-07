@@ -2,8 +2,8 @@ from collections import defaultdict
 
 import unidist.core.backends.mpi.core.common as common
 import unidist.core.backends.mpi.core.communication as communication
+from unidist.core.backends.mpi.core.async_operations import AsyncOperations
 from unidist.core.backends.mpi.core.worker.object_store import ObjectStore
-from unidist.core.backends.mpi.core.worker.async_operations import AsyncOperations
 
 
 mpi_state = communication.MPIState.get_instance()
