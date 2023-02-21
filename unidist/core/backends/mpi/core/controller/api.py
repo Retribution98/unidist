@@ -51,6 +51,11 @@ topology = dict()
 is_mpi_initialized = False
 
 
+mpi_state = communication.MPIState.get_instance()
+waiting_log_file = "waiting_{}.log".format(mpi_state.rank if mpi_state is not None else 0)
+w_logger = common.get_logger(waiting_log_file, waiting_log_file, True)
+
+
 def init():
     """
     Initialize MPI processes.
@@ -189,6 +194,7 @@ def shutdown():
     async_operations.finish()
     if not MPI.Is_finalized():
         MPI.Finalize()
+    communication.get_wait_time(w_logger)
 
 
 def cluster_resources():

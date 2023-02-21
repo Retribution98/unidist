@@ -7,6 +7,7 @@
 from collections import defaultdict
 import socket
 import time
+import traceback
 
 try:
     import mpi4py
@@ -32,8 +33,29 @@ sleep_time = 0.0001
 
 
 # Logger configuration
-logger = common.get_logger("communication", "communication.log")
+logger = common.get_logger("communication", "communication.log", True)
 is_logger_header_printed = False
+
+
+wait_time = []
+
+
+def in_traceback(value, tb):
+    for tb_str in tb:
+        if value in tb_str:
+            return True
+    return False
+
+
+
+def get_wait_time(waiting_logger):
+    for el in wait_time:
+        if el[0] > 0.1: # and in_traceback('communication.py", line 570, in recv_complex_data', el[1]):
+            waiting_logger.debug(el[0])
+            waiting_logger.debug(''.join(el[1]))
+            # for line in el[1]:
+                # waiting_logger.debug(line)
+
 
 
 def log_operation(op_type, status):
@@ -243,9 +265,11 @@ def mpi_recv_buffer(comm, source_rank):
     object
         Array buffer or serialized object.
     """
-    buf_size = comm.recv(source=source_rank)
+    # buf_size = comm.recv(source=source_rank)
+    buf_size = mpi_busy_wait_recv(comm, source_rank=source_rank)
     s_buffer = bytearray(buf_size)
-    comm.Recv([s_buffer, MPI.CHAR], source=source_rank)
+    # comm.Recv([s_buffer, MPI.CHAR], source=source_rank)
+    mpi_busy_wait_buffer_recv(comm, buf_spec=[s_buffer, MPI.CHAR], source_rank=source_rank)
     return s_buffer
 
 
@@ -286,10 +310,38 @@ def mpi_busy_wait_recv(comm, source_rank):
     source_rank : int
         Source MPI process to receive data.
     """
+    global wait_time
     req_handle = comm.irecv(source=source_rank)
+    time_start = time.perf_counter()
     while True:
         status, data = req_handle.test()
         if status:
+            time_end = time.perf_counter()
+            wait_time.append((time_end - time_start, traceback.format_stack()))
+            return data
+        else:
+            time.sleep(sleep_time)
+
+
+def mpi_busy_wait_buffer_recv(comm, buf_spec, source_rank):
+    """
+    Wait for receive operation result in a custom busy wait loop.
+
+    Parameters
+    ----------
+    comm : object
+        MPI communicator object.
+    source_rank : int
+        Source MPI process to receive data.
+    """
+    global wait_time
+    req_handle = comm.Irecv(buf_spec, source=source_rank)
+    time_start = time.perf_counter()
+    while True:
+        status, data = req_handle.test()
+        if status:
+            time_end = time.perf_counter()
+            wait_time.append((time_end - time_start, traceback.format_stack()))
             return data
         else:
             time.sleep(sleep_time)
@@ -514,15 +566,18 @@ def recv_complex_data(comm, source_rank):
     # First MPI call uses busy wait loop to remove possible contention
     # in a long running data receive operations.
 
-    info = comm.recv(source=source_rank)
+    # info = comm.recv(source=source_rank)
+    info = mpi_busy_wait_recv(comm, source_rank=source_rank)
 
     msgpack_buffer = bytearray(info["s_data_len"])
     buffer_count = info["buffer_count"]
     raw_buffers = list(map(bytearray, info["raw_buffers_len"]))
     with pkl5._bigmpi as bigmpi:
-        comm.Recv(bigmpi(msgpack_buffer), source=source_rank)
+        mpi_busy_wait_buffer_recv(comm, buf_spec=bigmpi(msgpack_buffer), source_rank=source_rank)
+        # comm.Recv(bigmpi(msgpack_buffer), source=source_rank)
         for rbuf in raw_buffers:
-            comm.Recv(bigmpi(rbuf), source=source_rank)
+            mpi_busy_wait_buffer_recv(comm, buf_spec=bigmpi(rbuf), source_rank=source_rank)
+            # comm.Recv(bigmpi(rbuf), source=source_rank)
 
     # Set the necessary metadata for unpacking
     deserializer = ComplexDataSerializer(raw_buffers, buffer_count)
@@ -618,7 +673,8 @@ def recv_simple_operation(comm, source_rank):
     -----
     De-serialization is a simple pickle.load in this case
     """
-    return comm.recv(source=source_rank)
+    # return comm.recv(source=source_rank)
+    return mpi_busy_wait_recv(comm, source_rank)
 
 
 def isend_complex_operation(

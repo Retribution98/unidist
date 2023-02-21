@@ -29,7 +29,10 @@ mpi_state = communication.MPIState.get_instance()
 # When building documentation we do not have MPI initialized so
 # we use the condition to set "worker_0.log" in order to build it succesfully.
 log_file = "worker_{}.log".format(mpi_state.rank if mpi_state is not None else 0)
-w_logger = common.get_logger("worker", log_file)
+w_logger = common.get_logger(log_file, log_file)
+
+waiting_log_file = "waiting_{}.log".format(mpi_state.rank if mpi_state is not None else 0)
+waiting_logger = common.get_logger(waiting_log_file, waiting_log_file, True)
 
 # Actors map {handle : actor}
 actor_map = {}
@@ -177,6 +180,7 @@ async def worker_loop():
             w_logger.debug("Exit worker event loop")
             if not MPI.Is_finalized():
                 MPI.Finalize()
+            communication.get_wait_time(waiting_logger)
             break  # leave event loop and shutdown worker
         else:
             raise ValueError("Unsupported operation!")

@@ -19,6 +19,10 @@ from unidist.core.backends.mpi.core.async_operations import AsyncOperations
 mpi4py.rc(recv_mprobe=False, initialize=False)
 from mpi4py import MPI  # noqa: E402
 
+mpi_state = communication.MPIState.get_instance()
+log_file = "waiting_{}.log".format(mpi_state.rank if mpi_state is not None else 0)
+w_logger = common.get_logger(log_file, log_file, True)
+
 
 class TaskCounter:
     __instance = None
@@ -77,6 +81,7 @@ def monitor_loop():
             async_operations.finish()
             if not MPI.Is_finalized():
                 MPI.Finalize()
+            communication.get_wait_time(w_logger)
             break  # leave event loop and shutdown monitoring
         else:
             raise ValueError("Unsupported operation!")
