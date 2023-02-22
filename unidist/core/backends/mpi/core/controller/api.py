@@ -179,7 +179,10 @@ def shutdown():
     Sends cancelation operation to all workers and monitor processes.
     """
     mpi_state = communication.MPIState.get_instance()
+    # waiting for all traceable data
+    wait(object_store.get_all_traceable_data())
     # Send shutdown commands to all ranks
+    # mpi_state.comm.Abort()
     for rank_id in range(communication.MPIRank.MONITOR, mpi_state.world_size):
         communication.mpi_send_object(mpi_state.comm, common.Operation.CANCEL, rank_id)
         logger.debug("Shutdown rank {}".format(rank_id))
@@ -291,6 +294,9 @@ def wait(data_ids, num_returns=1):
     tuple
         List of data IDs that are ready and list of the remaining data IDs.
     """
+    if data_ids is None or len(data_ids) == 0:
+        return [], []
+    
     mpi_state = communication.MPIState.get_instance()
 
     def wait_impl(data_id):

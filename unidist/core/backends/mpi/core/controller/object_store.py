@@ -34,6 +34,8 @@ class ObjectStore:
         # Data serialized cache
         self._serialization_cache = {}
 
+        self._tracked_data_ids = []
+
     @classmethod
     def get_instance(cls):
         """
@@ -137,6 +139,9 @@ class ObjectStore:
         """
         return data_id in self._data_owner_map
 
+    def get_all_traceable_data(self):
+        return self._tracked_data_ids
+
     def clear(self, cleanup_list):
         """
         Clear all local dictionary data ID instances from `cleanup_list`.
@@ -193,6 +198,7 @@ class ObjectStore:
         if num_returns == 1:
             output_ids = self.generate_data_id(gc)
             self.put_data_owner(output_ids, dest_rank)
+            self._tracked_data_ids.append(output_ids)
         elif num_returns == 0:
             output_ids = None
         else:
@@ -201,6 +207,7 @@ class ObjectStore:
                 output_id = self.generate_data_id(gc)
                 output_ids.append(output_id)
                 self.put_data_owner(output_id, dest_rank)
+                self._tracked_data_ids.extend(output_ids)
         return output_ids
 
     def cache_send_info(self, data_id, rank):
