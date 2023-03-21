@@ -155,7 +155,7 @@ def request_worker_data(data_id):
     )
 
     # Blocking get
-    data = communication.recv_complex_data(mpi_state.comm, owner_rank)
+    data = communication.recv_complex_data(mpi_state.comm, owner_rank, tag=operation_type)
 
     # Caching the result, check the protocol correctness here
     object_store.put(data_id, data)

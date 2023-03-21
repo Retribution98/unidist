@@ -237,6 +237,7 @@ class RequestStore:
                     mpi_state.comm,
                     operation_data,
                     source_rank,
+                    tag=common.Operation.GET
                 )
             else:
                 operation_type = common.Operation.PUT_DATA

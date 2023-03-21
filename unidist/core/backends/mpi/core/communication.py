@@ -331,7 +331,7 @@ def recv_operation_type(comm):
 # --------------------------------- #
 
 
-def _send_complex_data_impl(comm, s_data, raw_buffers, buffer_count, dest_rank):
+def _send_complex_data_impl(comm, s_data, raw_buffers, buffer_count, dest_rank, tag=None):
     """
     Send already serialized complex data.
 
@@ -355,15 +355,16 @@ def _send_complex_data_impl(comm, s_data, raw_buffers, buffer_count, dest_rank):
         "buffer_count": buffer_count,
         "raw_buffers_len": [len(sbuf) for sbuf in raw_buffers],
     }
-
-    comm.send(info, dest=dest_rank)
+    if tag is None:
+        tag = MPI.ANY_TAG
+    comm.send(info, dest=dest_rank, tag=tag)
     with pkl5._bigmpi as bigmpi:
-        comm.Send(bigmpi(s_data), dest=dest_rank)
+        comm.Send(bigmpi(s_data), dest=dest_rank, tag=tag)
         for sbuf in raw_buffers:
-            comm.Send(bigmpi(sbuf), dest=dest_rank)
+            comm.Send(bigmpi(sbuf), dest=dest_rank, tag=tag)
 
 
-def send_complex_data(comm, data, dest_rank):
+def send_complex_data(comm, data, dest_rank, tag=None):
     """
     Send the data that consists of different user provided complex types, lambdas and buffers in a blocking way.
 
@@ -399,7 +400,7 @@ def send_complex_data(comm, data, dest_rank):
     buffer_count = serializer.buffer_count
 
     # MPI comminucation
-    _send_complex_data_impl(comm, s_data, raw_buffers, buffer_count, dest_rank)
+    _send_complex_data_impl(comm, s_data, raw_buffers, buffer_count, dest_rank, tag=tag)
 
     # For caching purpose
     return s_data, raw_buffers, buffer_count
@@ -494,7 +495,7 @@ def isend_complex_data(comm, data, dest_rank):
     return handlers, s_data, raw_buffers, buffer_count
 
 
-def recv_complex_data(comm, source_rank):
+def recv_complex_data(comm, source_rank, tag=None):
     """
     Receive the data that may consist of different user provided complex types, lambdas and buffers.
 
@@ -515,16 +516,17 @@ def recv_complex_data(comm, source_rank):
     # Recv main message pack buffer.
     # First MPI call uses busy wait loop to remove possible contention
     # in a long running data receive operations.
-
-    info = comm.recv(source=source_rank)
+    if tag is None:
+        tag = MPI.ANY_TAG
+    info = comm.recv(source=source_rank, tag=tag)
 
     msgpack_buffer = bytearray(info["s_data_len"])
     buffer_count = info["buffer_count"]
     raw_buffers = list(map(bytearray, info["raw_buffers_len"]))
     with pkl5._bigmpi as bigmpi:
-        comm.Recv(bigmpi(msgpack_buffer), source=source_rank)
+        comm.Recv(bigmpi(msgpack_buffer), source=source_rank, tag=tag)
         for rbuf in raw_buffers:
-            comm.Recv(bigmpi(rbuf), source=source_rank)
+            comm.Recv(bigmpi(rbuf), source=source_rank, tag=tag)
 
     # Set the necessary metadata for unpacking
     deserializer = ComplexDataSerializer(raw_buffers, buffer_count)
