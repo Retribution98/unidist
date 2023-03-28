@@ -59,6 +59,8 @@ def monitor_loop():
     mpi_state = communication.MPIState.get_instance()
     async_operations = AsyncOperations.get_instance()
 
+    shared_index = 0
+
     while True:
         # Listen receive operation from any source
         operation_type, source_rank = communication.recv_operation_type(mpi_state.comm)
@@ -73,6 +75,12 @@ def monitor_loop():
                 task_counter.task_counter,
                 source_rank,
             )
+        elif operation_type == common.Operation.RESERVE_SHARING_MEMORY:
+            request = communication.recv_simple_data(mpi_state.comm, source_rank)
+            first_index = shared_index
+            last_index = first_index + request["size"]
+            shared_index = last_index
+            communication.mpi_send_object(mpi_state.comm, data=(first_index, last_index), dest_rank=source_rank)
         elif operation_type == common.Operation.CANCEL:
             async_operations.finish()
             if not MPI.Is_finalized():

@@ -1,4 +1,4 @@
-# Copyright (C) 2021-2023 Modin authors
+# Copyright (C) 2021-2022 Modin authors
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,30 +9,42 @@ from collections import defaultdict
 
 import unidist.core.backends.mpi.core.common as common
 import unidist.core.backends.mpi.core.communication as communication
+from unidist.core.backends.mpi.core.serialization import ComplexDataSerializer
+
+
+logger = common.get_logger("obj_store", "obj_store.log", True)
 
 
 class ObjectStore:
     """
-    Class that stores objects and provides access to these from master process.
+    Class that stores local objects and provides access to them.
 
     Notes
     -----
-    Currently, the storage is local to the current process only.
+    Currently, the storage is local to the current worker process only.
     """
 
     __instance = None
 
     def __init__(self):
-        # Add local data {DataID : Data}
+        self._shared_buffer = None
+
+        # Add local data {DataId : Data}
         self._data_map = weakref.WeakKeyDictionary()
-        # Data owner {DataID : Rank}
+        # Shared memory range {DataID: (firstIndex, lastIndex)}
+        self._shared_info = weakref.WeakKeyDictionary()
+        # "strong" references to data IDs {DataId : DataId}
+        # we are using dict here to improve performance when getting an element from it,
+        # whereas other containers would require O(n) complexity
+        self._data_id_map = {}
+        # Data owner {DataId : Rank}
         self._data_owner_map = weakref.WeakKeyDictionary()
         # Data was already sent to this ranks {DataID : [ranks]}
         self._sent_data_map = defaultdict(set)
         # Data id generator
         self._data_id_counter = 0
         # Data serialized cache
-        self._serialization_cache = {}
+        self._serialization_cache = weakref.WeakKeyDictionary()
 
     @classmethod
     def get_instance(cls):
@@ -47,12 +59,16 @@ class ObjectStore:
             cls.__instance = ObjectStore()
         return cls.__instance
 
+    def init_shared_memory(self, comm, size):
+        self._shared_buffer, itemsize = communication.init_shared_memory(comm, size)
+
     def put(self, data_id, data):
         """
-        Put data to internal dictionary.
+        Put `data` to internal dictionary.
 
         Parameters
         ----------
+        data_id : unidist.core.backends.common.data_id.DataID
         data_id : unidist.core.backends.mpi.core.common.MasterDataID
             An ID to data.
         data : object
@@ -60,12 +76,52 @@ class ObjectStore:
         """
         self._data_map[data_id] = data
 
+    def put_shared_memory(self, data_id, reservation_data, serialized_data):
+        if self._shared_buffer is None:
+            raise RuntimeError('Shared memory was not initialized')
+        
+        first_index = reservation_data["firstIndex"]
+        last_index = reservation_data["lastIndex"]
+
+        s_data = serialized_data["s_data"]
+        raw_buffers = serialized_data["raw_buffers"]
+        buffer_count = serialized_data["buffer_count"]
+        s_data_len = len(s_data)
+
+        s_data_first_index = first_index
+        s_data_last_index = s_data_first_index + s_data_len
+        
+        if s_data_last_index > last_index:
+            raise ValueError('Not enough shared space for data')
+        self._shared_buffer[s_data_first_index:s_data_last_index] = s_data
+
+        buffer_lens = []
+        last_prev_index = s_data_last_index
+        for i, raw_buffer in enumerate(raw_buffers):
+            raw_buffer_first_index = last_prev_index
+            raw_buffer_len = len(raw_buffer)
+            raw_buffer_last_index = raw_buffer_first_index + len(raw_buffer)
+            if s_data_last_index > last_index:
+                raise ValueError(f'Not enough shared space for {i} raw_buffer')
+
+            self._shared_buffer[raw_buffer_first_index:raw_buffer_last_index] = raw_buffer
+
+            buffer_lens.append(raw_buffer_len)
+            last_prev_index = raw_buffer_last_index
+
+        # save shared memory range for data_id
+        return s_data_len, buffer_lens, buffer_count, first_index
+
+    def put_shared_info(self, data_id, shared_info):
+        self._shared_info[data_id] = shared_info
+
     def put_data_owner(self, data_id, rank):
         """
         Put data location (owner rank) to internal dictionary.
 
         Parameters
         ----------
+        data_id : unidist.core.backends.common.data_id.DataID
         data_id : unidist.core.backends.mpi.core.common.MasterDataID
             An ID to data.
         rank : int
@@ -79,6 +135,7 @@ class ObjectStore:
 
         Parameters
         ----------
+        data_id : unidist.core.backends.common.data_id.DataID
         data_id : unidist.core.backends.mpi.core.common.MasterDataID
             An ID to data.
 
@@ -89,12 +146,42 @@ class ObjectStore:
         """
         return self._data_map[data_id]
 
+    def get_data_shared_info(self, data_id):
+        return self._shared_info[data_id]
+
+    def get_shared_data(self, data_id):
+        if self._shared_buffer is None:
+            raise RuntimeError('Shared memory was not initialized')
+        
+        info_package = self._shared_info[data_id]
+        first_index = info_package["first_shared_index"]
+        buffer_lens = info_package["raw_buffers_lens"]
+        buffer_count = info_package["buffer_count"]
+        s_data_len = info_package["s_data_len"]
+
+        s_data_last_index = first_index + s_data_len
+        s_data = self._shared_buffer[first_index : s_data_last_index].toreadonly()
+        prev_last_index = s_data_last_index
+        raw_buffers = []
+        for raw_buffer_len in buffer_lens:
+            raw_last_index = prev_last_index + raw_buffer_len
+            raw_buffers.append(self._shared_buffer[prev_last_index : raw_last_index].toreadonly())
+            prev_last_index = raw_last_index
+            
+        # Set the necessary metadata for unpacking
+        deserializer = ComplexDataSerializer(raw_buffers, buffer_count)
+
+        # Start unpacking
+        return deserializer.deserialize(s_data)
+
+
     def get_data_owner(self, data_id):
         """
         Get the data owner rank.
 
         Parameters
         ----------
+        data_id : unidist.core.backends.common.data_id.DataID
         data_id : unidist.core.backends.mpi.core.common.MasterDataID
             An ID to data.
 
@@ -111,6 +198,7 @@ class ObjectStore:
 
         Parameters
         ----------
+        data_id : unidist.core.backends.common.data_id.DataID
         data_id : unidist.core.backends.mpi.core.common.MasterDataID
             An ID to data.
 
@@ -121,38 +209,66 @@ class ObjectStore:
         """
         return data_id in self._data_map
 
+    def contains_shared_memory(self, data_id):
+        return data_id in self._shared_info
+
     def contains_data_owner(self, data_id):
         """
         Check if the data location info associated with `data_id` exists in a local dictionary.
 
         Parameters
         ----------
+        data_id : unidist.core.backends.common.data_id.DataID
         data_id : unidist.core.backends.mpi.core.common.MasterDataID
             An ID to data.
 
         Returns
         -------
         bool
-            Return the status if an object location is known.
+            Return the ``True`` status if an object location is known.
         """
         return data_id in self._data_owner_map
 
+    def get_unique_data_id(self, data_id):
+        """
+        Get the "strong" reference to the data ID if it is already stored locally.
+
+        If the passed data ID is not stored locally yet, save and return it.
+
+        Parameters
+        ----------
+        data_id : unidist.core.backends.common.data_id.DataID
+            An ID to data.
+
+        Returns
+        -------
+        unidist.core.backends.common.data_id.DataID
+            The unique ID to data.
+
+        Notes
+        -----
+        We need to use a unique data ID reference for the garbage colleactor to work correctly.
+        """
+        if data_id not in self._data_id_map:
+            self._data_id_map[data_id] = data_id
+        return self._data_id_map[data_id]
+
     def clear(self, cleanup_list):
         """
-        Clear all local dictionary data ID instances from `cleanup_list`.
+        Clear "strong" references to data IDs from `cleanup_list`.
 
         Parameters
         ----------
         cleanup_list : list
-            List of ``DataID``-s.
+            List of data IDs.
 
         Notes
         -----
-        Only cache of sent data can be cleared - the rest are weakreferenced.
+        The actual data will be collected later when there is no weak or
+        strong reference to data in the current worker.
         """
         for data_id in cleanup_list:
-            self._sent_data_map.pop(data_id, None)
-        self._serialization_cache.clear()
+            self._data_id_map.pop(data_id, None)
 
     def generate_data_id(self, gc):
         """
@@ -238,10 +354,11 @@ class ObjectStore:
 
     def cache_serialized_data(self, data_id, data):
         """
-        Save communication event for this `data_id` and `data`.
+        Save serialized object for this `data_id`.
 
         Parameters
         ----------
+        data_id : unidist.core.backends.common.data_id.DataID
         data_id : unidist.core.backends.mpi.core.common.MasterDataID
             An ID to data.
         data : object
@@ -280,6 +397,3 @@ class ObjectStore:
             Cached serialized data associated with `data_id`.
         """
         return self._serialization_cache[data_id]
-
-
-object_store = ObjectStore.get_instance()

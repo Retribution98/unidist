@@ -6,6 +6,8 @@
 import asyncio
 from functools import wraps, partial
 
+from unidist.core.backends.mpi.core.controller.common import get_complex_data
+
 try:
     import mpi4py
 except ImportError:
@@ -15,7 +17,7 @@ except ImportError:
 
 import unidist.core.backends.mpi.core.common as common
 import unidist.core.backends.mpi.core.communication as communication
-from unidist.core.backends.mpi.core.worker.object_store import ObjectStore
+from unidist.core.backends.mpi.core.object_store import ObjectStore
 from unidist.core.backends.mpi.core.worker.request_store import RequestStore
 from unidist.core.backends.mpi.core.worker.task_store import TaskStore
 from unidist.core.backends.mpi.core.async_operations import AsyncOperations
@@ -94,7 +96,7 @@ async def worker_loop():
 
         # Proceed the request
         if operation_type == common.Operation.EXECUTE:
-            request = communication.recv_complex_data(mpi_state.comm, source_rank)
+            request = get_complex_data(mpi_state.comm, source_rank)
 
             # Execute the task if possible
             pending_request = task_store.process_task_request(request)
@@ -105,14 +107,14 @@ async def worker_loop():
                 task_store.check_pending_tasks()
 
         elif operation_type == common.Operation.GET:
-            request = communication.recv_simple_operation(mpi_state.comm, source_rank)
+            request = communication.recv_simple_data(mpi_state.comm, source_rank)
             request["id"] = object_store.get_unique_data_id(request["id"])
             request_store.process_get_request(
                 request["source"], request["id"], request["is_blocking_op"]
             )
 
         elif operation_type == common.Operation.PUT_DATA:
-            request = communication.recv_complex_data(mpi_state.comm, source_rank)
+            request = get_complex_data(mpi_state.comm, source_rank)
             w_logger.debug(
                 "PUT (RECV) {} id from {} rank".format(request["id"]._id, source_rank)
             )
@@ -128,7 +130,7 @@ async def worker_loop():
             task_store.check_pending_actor_tasks()
 
         elif operation_type == common.Operation.PUT_OWNER:
-            request = communication.recv_simple_operation(mpi_state.comm, source_rank)
+            request = communication.recv_simple_data(mpi_state.comm, source_rank)
             request["id"] = object_store.get_unique_data_id(request["id"])
             object_store.put_data_owner(request["id"], request["owner"])
 
@@ -138,14 +140,27 @@ async def worker_loop():
                 )
             )
 
+        elif operation_type == common.Operation.PUT_SHARED_DATA:
+            request = communication.recv_simple_data(mpi_state.comm, source_rank)
+            request["id"] = object_store.get_unique_data_id(request["id"])
+            object_store.put_shared_info(request["id"], request)
+
+            # Clear cached request to another worker, if data_id became available
+            request_store.clear_cache(request["id"])
+
+            # Check pending requests. Maybe some data became available.
+            task_store.check_pending_tasks()
+            # Check pending actor requests also.
+            task_store.check_pending_actor_tasks()
+
         elif operation_type == common.Operation.WAIT:
-            request = communication.recv_simple_operation(mpi_state.comm, source_rank)
+            request = communication.recv_simple_data(mpi_state.comm, source_rank)
             w_logger.debug("WAIT for {} id".format(request["id"]._id))
             request["id"] = object_store.get_unique_data_id(request["id"])
             request_store.process_wait_request(request["id"])
 
         elif operation_type == common.Operation.ACTOR_CREATE:
-            request = communication.recv_complex_data(mpi_state.comm, source_rank)
+            request = get_complex_data(mpi_state.comm, source_rank)
             cls = request["class"]
             args = request["args"]
             kwargs = request["kwargs"]
@@ -154,7 +169,7 @@ async def worker_loop():
             actor_map[handler] = cls(*args, **kwargs)
 
         elif operation_type == common.Operation.ACTOR_EXECUTE:
-            request = communication.recv_complex_data(mpi_state.comm, source_rank)
+            request = get_complex_data(mpi_state.comm, source_rank)
 
             # Prepare the data
             method_name = request["task"]

@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """High-level API of MPI backend."""
-
+import os
+import psutil
 import sys
 import atexit
 import signal
@@ -17,17 +18,19 @@ except ImportError:
         "Missing dependency 'mpi4py'. Use pip or conda to install it."
     ) from None
 
-from unidist.core.backends.mpi.core.controller.object_store import object_store
+from unidist.core.backends.mpi.core.object_store import ObjectStore
 from unidist.core.backends.mpi.core.controller.garbage_collector import (
     garbage_collector,
 )
 from unidist.core.backends.mpi.core.controller.common import (
+    put_to_shared_memory,
     request_worker_data,
     push_data,
     RoundRobin,
 )
 import unidist.core.backends.mpi.core.common as common
 import unidist.core.backends.mpi.core.communication as communication
+from unidist.core.backends.mpi.core.serialization import ComplexDataSerializer
 from unidist.core.backends.mpi.core.async_operations import AsyncOperations
 from unidist.config import (
     CpuCount,
@@ -135,6 +138,28 @@ def init():
     if not is_mpi_initialized:
         is_mpi_initialized = True
 
+    virtual_memory = psutil.virtual_memory().total
+    if sys.platform.startswith("linux"):
+        shm_fd = os.open("/dev/shm", os.O_RDONLY)
+        try:
+            shm_stats = os.fstatvfs(shm_fd)
+            system_memory = shm_stats.f_bsize * shm_stats.f_bavail
+            if system_memory / (virtual_memory / 2) < 0.99:
+                print(
+                    f"The size of /dev/shm is too small ({system_memory} bytes). The required size "
+                    + f"at least half of RAM ({virtual_memory // 2} bytes). Please, delete files in /dev/shm or "
+                    + "increase size of /dev/shm with --shm-size in Docker."
+                )
+        finally:
+            os.close(shm_fd)
+    else:
+        system_memory = virtual_memory
+    system_memory = system_memory
+    # experimentary for 07 server
+    # 4800374938 - 73728 * mpi_state.world_size
+    shared_memory_size = int(system_memory*0.95) if mpi_state.rank == communication.MPIRank.MONITOR else 0
+    ObjectStore.get_instance().init_shared_memory(comm, shared_memory_size)
+
     if mpi_state.rank == communication.MPIRank.ROOT:
         atexit.register(_termination_handler)
         signal.signal(signal.SIGTERM, _termination_handler)
@@ -227,8 +252,10 @@ def put(data):
     unidist.core.backends.mpi.core.common.MasterDataID
         An ID of an object in object storage.
     """
+    object_store = ObjectStore.get_instance()
     data_id = object_store.generate_data_id(garbage_collector)
     object_store.put(data_id, data)
+    put_to_shared_memory(data_id.base_data_id())
 
     logger.debug("PUT {} id".format(data_id._id))
 
@@ -249,6 +276,7 @@ def get(data_ids):
     object
         A Python object.
     """
+    object_store = ObjectStore.get_instance()
 
     def get_impl(data_id):
         if object_store.contains(data_id):
@@ -297,6 +325,7 @@ def wait(data_ids, num_returns=1):
         List of data IDs that are ready and list of the remaining data IDs.
     """
     mpi_state = communication.MPIState.get_instance()
+    object_store = ObjectStore.get_instance()
 
     def wait_impl(data_id):
         if object_store.contains(data_id):
@@ -369,6 +398,7 @@ def submit(task, *args, num_returns=1, **kwargs):
 
     dest_rank = RoundRobin.get_instance().schedule_rank()
 
+    object_store = ObjectStore.get_instance()
     output_ids = object_store.generate_output_data_id(
         dest_rank, garbage_collector, num_returns
     )
