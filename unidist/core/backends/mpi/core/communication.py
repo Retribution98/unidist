@@ -30,8 +30,6 @@ from mpi4py.util import pkl5  # noqa: E402
 # Sleep time setting inside the busy wait loop
 sleep_time = 0.0001
 
-output_shared_size_threshold = 1024**2
-
 # Logger configuration
 logger = common.get_logger("communication", "communication.log")
 is_logger_header_printed = False
@@ -159,7 +157,10 @@ def init_shared_memory(comm, size):
     info = MPI.Info.Create()
     # info.Set("alloc_shared_noncontig", "true")
     win = MPI.Win.Allocate_shared(size, MPI.BYTE.size, comm=comm, info=info)
-    return win.Shared_query(MPIRank.MONITOR)
+    win_helper = MPI.Win.Allocate_shared(1 if size > 0 else 0, MPI.INT.size, comm=comm, info=info)
+
+    shared_buffer, itemsize = win.Shared_query(MPIRank.MONITOR)
+    return shared_buffer, itemsize, win_helper
 
 def reserve_shared_memory(comm, data_id, data, is_serialized=False):
     if is_serialized:

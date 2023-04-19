@@ -4,15 +4,13 @@
 
 """`ObjectStore` functionality."""
 
+from array import array
 import weakref
 from collections import defaultdict
 
 import unidist.core.backends.mpi.core.common as common
 import unidist.core.backends.mpi.core.communication as communication
 from unidist.core.backends.mpi.core.serialization import ComplexDataSerializer
-
-
-logger = common.get_logger("obj_store", "obj_store.log", True)
 
 
 class ObjectStore:
@@ -28,6 +26,7 @@ class ObjectStore:
 
     def __init__(self):
         self._shared_buffer = None
+        self._helper_win = None
 
         # Add local data {DataId : Data}
         self._data_map = weakref.WeakKeyDictionary()
@@ -60,7 +59,34 @@ class ObjectStore:
         return cls.__instance
 
     def init_shared_memory(self, comm, size):
-        self._shared_buffer, itemsize = communication.init_shared_memory(comm, size)
+        self._shared_buffer, itemsize, self._helper_win = communication.init_shared_memory(comm, size)
+        self._helper_buffer = array('L', [0])
+
+    def reserve_shared_memory(self, data):
+        serializer = ComplexDataSerializer()
+        # Main job
+        s_data = serializer.serialize(data)
+        # Retrive the metadata
+        raw_buffers = serializer.buffers
+        buffer_count = serializer.buffer_count
+        size = len(s_data) + sum([len(buf) for buf in raw_buffers])
+
+        self._helper_win.Lock(communication.MPIRank.MONITOR)
+        self._helper_win.Get(self._helper_buffer, communication.MPIRank.MONITOR)
+        firstIndex = self._helper_buffer[0]
+        lastIndex = firstIndex + size
+        self._helper_buffer[0] = lastIndex
+        self._helper_win.Put(array('L', [lastIndex]), communication.MPIRank.MONITOR)
+        self._helper_win.Unlock(communication.MPIRank.MONITOR)
+        return {
+            "firstIndex": firstIndex, 
+            "lastIndex": lastIndex
+        }, {
+            "s_data": s_data,
+            "raw_buffers": raw_buffers,
+            "buffer_count": buffer_count,
+        }
+
 
     def put(self, data_id, data):
         """

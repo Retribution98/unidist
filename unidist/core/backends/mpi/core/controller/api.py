@@ -38,6 +38,7 @@ from unidist.config import (
     MpiHosts,
     ValueSource,
     MpiPickleThreshold,
+    MpiSharingThreshold,
 )
 
 
@@ -101,6 +102,8 @@ def init():
                 py_str += [f"cfg.CpuCount.put({CpuCount.get()})"]
             if MpiPickleThreshold.get_value_source() != ValueSource.DEFAULT:
                 py_str += [f"cfg.MpiPickleThreshold.put({MpiPickleThreshold.get()})"]
+            if MpiSharingThreshold.get_value_source() != ValueSource.DEFAULT:
+                py_str += [f"cfg.MpiSharingThreshold.put({MpiSharingThreshold.get()})"]
             py_str += ["unidist.init()"]
             py_str = "; ".join(py_str)
             args += [py_str]
@@ -139,26 +142,30 @@ def init():
         is_mpi_initialized = True
 
     virtual_memory = psutil.virtual_memory().total
-    if sys.platform.startswith("linux"):
-        shm_fd = os.open("/dev/shm", os.O_RDONLY)
-        try:
-            shm_stats = os.fstatvfs(shm_fd)
-            system_memory = shm_stats.f_bsize * shm_stats.f_bavail
-            if system_memory / (virtual_memory / 2) < 0.99:
-                print(
-                    f"The size of /dev/shm is too small ({system_memory} bytes). The required size "
-                    + f"at least half of RAM ({virtual_memory // 2} bytes). Please, delete files in /dev/shm or "
-                    + "increase size of /dev/shm with --shm-size in Docker."
-                )
-        finally:
-            os.close(shm_fd)
+    if mpi_state.rank == communication.MPIRank.MONITOR:
+        if sys.platform.startswith("linux"):
+            shm_fd = os.open("/dev/shm", os.O_RDONLY)
+            try:
+                shm_stats = os.fstatvfs(shm_fd)
+                system_memory = shm_stats.f_bsize * shm_stats.f_bavail
+                if system_memory / (virtual_memory / 2) < 0.99:
+                    print(
+                        f"The size of /dev/shm is too small ({system_memory} bytes). The required size "
+                        + f"at least half of RAM ({virtual_memory // 2} bytes). Please, delete files in /dev/shm or "
+                        + "increase size of /dev/shm with --shm-size in Docker."
+                    )
+            finally:
+                os.close(shm_fd)
+        else:
+            system_memory = virtual_memory
+        
+        # use only 95% because other memory need for local worker storages
+        shared_memory = int(system_memory*0.95)
     else:
-        system_memory = virtual_memory
-    system_memory = system_memory
+        shared_memory = 0
     # experimentary for 07 server
     # 4800374938 - 73728 * mpi_state.world_size
-    shared_memory_size = int(system_memory*0.95) if mpi_state.rank == communication.MPIRank.MONITOR else 0
-    ObjectStore.get_instance().init_shared_memory(comm, shared_memory_size)
+    ObjectStore.get_instance().init_shared_memory(comm, shared_memory)
 
     if mpi_state.rank == communication.MPIRank.ROOT:
         atexit.register(_termination_handler)
@@ -255,7 +262,8 @@ def put(data):
     object_store = ObjectStore.get_instance()
     data_id = object_store.generate_data_id(garbage_collector)
     object_store.put(data_id, data)
-    put_to_shared_memory(data_id.base_data_id())
+    if sys.getsizeof(data) > MpiSharingThreshold.get():
+        put_to_shared_memory(data_id.base_data_id())
 
     logger.debug("PUT {} id".format(data_id._id))
 

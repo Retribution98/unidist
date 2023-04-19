@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Common functionality related to `controller`."""
-
 import sys
 import itertools
 
@@ -12,6 +11,7 @@ import unidist.core.backends.mpi.core.common as common
 import unidist.core.backends.mpi.core.communication as communication
 from unidist.core.backends.mpi.core.async_operations import AsyncOperations
 from unidist.core.backends.mpi.core.object_store import ObjectStore
+from unidist.config import MpiSharingThreshold
 
 logger = common.get_logger("common", "common.log")
 
@@ -321,7 +321,7 @@ def push_data(dest_rank, value, is_blocking_op=False):
             _push_local_data(dest_rank, data_id, is_blocking_op, is_serialized=True)
         elif object_store.contains(data_id):
             data = object_store.get(data_id)
-            if sys.getsizeof(data) > communication.output_shared_size_threshold:
+            if sys.getsizeof(data) > MpiSharingThreshold.get():
                 put_to_shared_memory(data_id)
                 _push_shared_data(dest_rank, data_id, is_blocking_op)
             else:
@@ -333,17 +333,17 @@ def push_data(dest_rank, value, is_blocking_op=False):
 
 def put_to_shared_memory(data_id):
     object_store = ObjectStore.get_instance()
-    mpi_state = communication.MPIState.get_instance()
 
     operation_data = object_store.get(data_id)
-    reservation_data, serialized_data = communication.reserve_shared_memory(
-        mpi_state.comm,
-        data_id,
-        operation_data,
-        is_serialized=False
-    )
-
+    reservation_data, serialized_data = object_store.reserve_shared_memory(operation_data)
+    # mpi_state = communication.MPIState.get_instance()
+    # reservation_data, serialized_data = communication.reserve_shared_memory(
+    #     mpi_state.comm,
+    #     data_id,
+    #     operation_data,
+    #     is_serialized=False
+    # )
+    
     s_data_len, buffer_lens, buffer_count, first_index = object_store.put_shared_memory(data_id, reservation_data, serialized_data)
     sharing_info = communication.get_shared_info(data_id, s_data_len, buffer_lens, buffer_count, first_index)
     object_store.put_shared_info(data_id, sharing_info)
-    

@@ -25,3 +25,10 @@ class MpiPickleThreshold(EnvironmentVariable, type=int):
 
     default = 1024**2 // 4  # 0.25 MiB
     varname = "UNIDIST_MPI_PICKLE_THRESHOLD"
+
+
+class MpiSharingThreshold(EnvironmentVariable, type=int):
+    """Minimum data size for sending with shared memory"""
+
+    default = 1024**2  # 1 MiB
+    varname = "UNIDIST_MPI_SHARING_THRESHOLD"
