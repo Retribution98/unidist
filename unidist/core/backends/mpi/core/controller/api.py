@@ -137,7 +137,6 @@ def init():
     # path to dynamically spawn MPI processes
     if rank == 0 and parent_comm == MPI.COMM_NULL:
         if IsMpiSpawnWorkers.get():
-            nprocs_to_spawn = CpuCount.get() + 1  # +1 for monitor process
             args = _get_py_flags()
             args += ["-c"]
             py_str = [
@@ -159,13 +158,18 @@ def init():
 
             hosts = MpiHosts.get()
             info = MPI.Info.Create()
+            cpu_count = CpuCount.get()
             if hosts:
+                host_list = str(hosts).split(",")
+                hosts_count = len(host_list)
+                nprocs_to_spawn = CpuCount.get() + hosts_count  # +1 for monitor process on each host
                 if "Open MPI" in MPI.Get_library_version():
                     host_list = str(hosts).split(",")
                     workers_per_host = [
-                        int(nprocs_to_spawn / len(host_list))
-                        + (1 if i < nprocs_to_spawn % len(host_list) else 0)
-                        for i in range(len(host_list))
+                        int(cpu_count / hosts_count)
+                        + (1 if i < cpu_count % hosts_count else 0)
+                        + 1 # for monitor process and +1 for master on 0 host
+                        for i in range(hosts_count)
                     ]
                     hosts = ",".join(
                         [
@@ -176,6 +180,8 @@ def init():
                     info.Set("add-host", hosts)
                 else:
                     info.Set("hosts", hosts)
+            else:
+                nprocs_to_spawn = CpuCount.get() + 1  # +1 for monitor process on a single host
 
             intercomm = MPI.COMM_SELF.Spawn(
                 sys.executable,
@@ -193,13 +199,11 @@ def init():
     if parent_comm != MPI.COMM_NULL:
         comm = parent_comm.Merge(high=True)
 
+    host_comm = comm.Split_type(MPI.COMM_TYPE_SHARED)
+    
     mpi_state = communication.MPIState.get_instance(
-        comm, comm.Get_rank(), comm.Get_size()
+        comm, host_comm
     )
-
-    global topology
-    if not topology:
-        topology = communication.get_topology()
 
     global is_mpi_initialized
     if not is_mpi_initialized:
@@ -210,8 +214,7 @@ def init():
         signal.signal(signal.SIGTERM, _termination_handler)
         signal.signal(signal.SIGINT, _termination_handler)
         return
-
-    if mpi_state.rank == communication.MPIRank.MONITOR:
+    elif mpi_state.host_rank == communication.MPIRank.MONITOR:
         from unidist.core.backends.mpi.core.monitor import monitor_loop
 
         monitor_loop()
@@ -221,11 +224,7 @@ def init():
         if not IsMpiSpawnWorkers.get():
             sys.exit()
         return
-
-    if mpi_state.rank not in (
-        communication.MPIRank.ROOT,
-        communication.MPIRank.MONITOR,
-    ):
+    else:
         from unidist.core.backends.mpi.core.worker.loop import worker_loop
 
         asyncio.run(worker_loop())
@@ -287,13 +286,13 @@ def cluster_resources():
         Dictionary with cluster nodes info in the form
         `{"node_ip0": {"CPU": x0}, "node_ip1": {"CPU": x1}, ...}`.
     """
-    global topology
-    if not topology:
+    mpi_state = communication.MPIState.get_instance()
+    if mpi_state is None:
         raise RuntimeError("'unidist.init()' has not been called yet")
 
     cluster_resources = defaultdict(dict)
-    for host, ranks_list in topology.items():
-        cluster_resources[host]["CPU"] = len(ranks_list)
+    for host, ranks_list in mpi_state.topology.items():
+        cluster_resources[host]["CPU"] = len([r for r in ranks_list if r not in (communication.MPIRank.ROOT, communication.MPIRank.MONITOR)])
 
     return dict(cluster_resources)
 
@@ -407,17 +406,18 @@ def wait(data_ids, num_returns=1):
         "num_returns": pending_returns,
     }
     mpi_state = communication.MPIState.get_instance()
+    root_monitor = mpi_state.get_monitor_by_worker_rank(communication.MPIRank.ROOT)
     # We use a blocking send and recv here because we have to wait for
     # completion of the communication, which is necessary for the pipeline to continue.
     communication.send_simple_operation(
         mpi_state.comm,
         operation_type,
         operation_data,
-        communication.MPIRank.MONITOR,
+        root_monitor,
     )
     data = communication.recv_simple_operation(
         mpi_state.comm,
-        communication.MPIRank.MONITOR,
+        root_monitor,
     )
     ready.extend(data["ready"])
     not_ready = data["not_ready"]
