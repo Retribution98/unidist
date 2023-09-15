@@ -70,6 +70,9 @@ class SharedObjectStore:
 
     __instance = None
 
+    SMALL_BUFFER_ALIGN = 8
+    BIG_BUFFER_ALIGN = 64
+    WRITING_THREAD_POOL_SIZE = 6
     # Service constants defining the structure of the service buffer
     SERVICE_COUNT = 20000
     INFO_COUNT = 4
@@ -181,6 +184,12 @@ class SharedObjectStore:
         # Set -1 to the service buffer because 0 is a valid value and may be recognized by mistake.
         if mpi_state.is_monitor_process():
             self.service_buffer[:] = array("l", [-1] * len(self.service_buffer))
+
+    def get_align_size(self, len_buffer):
+        return self.SMALL_BUFFER_ALIGN if len_buffer < 2048 else self.BIG_BUFFER_ALIGN
+
+    def aligned_len(self, len_buffer, align_size):
+        return ((len_buffer + align_size - 1) // align_size) * align_size
 
     def _parse_data_id(self, data_id):
         """
@@ -367,9 +376,10 @@ class SharedObjectStore:
         prev_last_index = s_data_last_index
         raw_buffers = []
         for raw_buffer_len in buffer_lens:
-            raw_last_index = prev_last_index + raw_buffer_len
+            raw_first_index = self.aligned_len(prev_last_index, self.get_align_size(raw_buffer_len))
+            raw_last_index = raw_first_index + raw_buffer_len
             raw_buffers.append(
-                self.shared_buffer[prev_last_index:raw_last_index].toreadonly()
+                self.shared_buffer[raw_first_index:raw_last_index].toreadonly()
             )
             prev_last_index = raw_last_index
 
@@ -382,6 +392,15 @@ class SharedObjectStore:
             f"Rank {communication.MPIState.get_instance().global_rank}: Get {data_id} from {first_index} to {prev_last_index}. Service index: {service_index}"
         )
         return data
+
+    def _parallel_write(self, buffer, first_index):
+        write_to(
+            buffer,
+            self.shared_buffer,
+            first_index,
+            self.get_align_size(len(buffer)),
+            self.WRITING_THREAD_POOL_SIZE
+        )
 
     def _write_to_shared_buffer(self, data_id, reservation_data, serialized_data):
         """
@@ -412,28 +431,22 @@ class SharedObjectStore:
         buffer_lens = []
         s_data_first_index = first_index
         s_data_last_index = s_data_first_index + s_data_len
-        # buffer_lens.append(s_data_len)
 
         if s_data_last_index > last_index:
             raise ValueError("Not enough shared space for data")
-        self.shared_buffer[s_data_first_index:s_data_last_index] = s_data
+        # self.shared_buffer[s_data_first_index:s_data_last_index] = s_data
+        self._parallel_write(s_data, s_data_first_index)
 
         last_prev_index = s_data_last_index
         for i, raw_buffer in enumerate(raw_buffers):
-            raw_buffer_first_index = last_prev_index
             raw_buffer_len = len(raw_buffer)
+            raw_buffer_first_index = self.aligned_len(last_prev_index, self.get_align_size(raw_buffer_len))
             raw_buffer_last_index = raw_buffer_first_index + len(raw_buffer)
             if s_data_last_index > last_index:
                 raise ValueError(f"Not enough shared space for {i} raw_buffer")
 
-            write_to(
-                raw_buffer,
-                self.shared_buffer[raw_buffer_first_index:raw_buffer_last_index],
-                6,
-            )
-            # self.shared_buffer[
-            #     raw_buffer_first_index:raw_buffer_last_index
-            # ] = raw_buffer
+            self._parallel_write(raw_buffer, raw_buffer_first_index)
+            # self.shared_buffer[raw_buffer_first_index:raw_buffer_last_index] = raw_buffer
 
             buffer_lens.append(raw_buffer_len)
             last_prev_index = raw_buffer_last_index
@@ -673,7 +686,10 @@ class SharedObjectStore:
         s_data = serializer.serialize(data)
         raw_buffers = serializer.buffers
         buffer_count = serializer.buffer_count
-        data_size = len(s_data) + sum([len(buf) for buf in raw_buffers])
+        data_size = sum(
+            [self.aligned_len(len(s_data), self.get_align_size(len(s_data)))] + 
+            [self.aligned_len(len(buf), self.get_align_size(len(buf))) for buf in raw_buffers]
+            )
         serialized_data = {
             "s_data": s_data,
             "raw_buffers": raw_buffers,
@@ -719,7 +735,7 @@ class SharedObjectStore:
         # check data in shared memory
         if not self._check_service_info(data_id, service_index):
             # reserve shared memory
-            shared_data_len = s_data_len + sum([buf for buf in raw_buffers_len])
+            shared_data_len = self.aligned_len(s_data_len, self.get_align_size(s_data_len)) + sum([self.aligned_len(buf, self.get_align_size(buf)) for buf in raw_buffers_len])
             reservation_info = communication.send_reserve_operation(
                 mpi_state.comm, data_id, shared_data_len
             )
