@@ -391,6 +391,11 @@ def put(data):
         shared_store.put(data_id, serialized_data)
     else:
         local_store.cache_serialized_data(data_id, serialized_data)
+        mpi_state = communication.MPIState.get_instance()
+        data_owner = mpi_state.workers[0]
+        push_data(data_owner, data_id)
+        local_store.clear_seralized_cache(data_id)
+        local_store.put_data_owner(data_id, data_owner)
 
     logger.debug("PUT {} id".format(data_id._id))
 

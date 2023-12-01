@@ -303,11 +303,8 @@ class LocalObjectStore:
         data : object
             Serialized data to cache.
         """
-        # Copying is necessary to avoid corruption of data obtained through out-of-band serialization,
-        # and buffers are marked read-only to prevent them from being modified.
-        data["raw_buffers"] = [
-            memoryview(buf.tobytes()).toreadonly() for buf in data["raw_buffers"]
-        ]
+        # Buffers are marked read-only to prevent them from being modified.
+        data["raw_buffers"] = [buf.toreadonly() for buf in data["raw_buffers"]]
         self._serialization_cache[data_id] = data
         self.maybe_update_data_id_map(data_id)
 
@@ -342,3 +339,14 @@ class LocalObjectStore:
             Cached serialized data associated with `data_id`.
         """
         return self._serialization_cache[data_id]
+
+    def clear_seralized_cache(self, data_id):
+        """
+        Clear serialized object for this `data_id`.
+
+        Parameters
+        ----------
+        data_id : unidist.core.backends.mpi.core.common.MpiDataID
+            An ID to data.
+        """
+        del self._serialization_cache[data_id]
