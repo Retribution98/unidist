@@ -418,12 +418,14 @@ class TaskStore:
             Same request if the task couldn`t be executed, otherwise ``None``.
         """
         # Parse request
-        local_store = LocalObjectStore.get_instance()
         task = request["task"]
         # Remote function here is a data id so we have to retrieve it from the storage,
         # whereas actor method is already materialized in the worker loop.
         if is_data_id(task):
-            task = local_store.get(task)
+            task, is_task_peding = self.unwrap_local_data_id(task)
+        else:
+            is_task_peding = False
+
         args = request["args"]
         kwargs = request["kwargs"]
         output_ids = request["output"]
@@ -445,7 +447,8 @@ class TaskStore:
 
         w_logger.debug("Is pending - {}".format(is_pending))
 
-        if is_pending or is_kw_pending:
+        if is_task_peding or is_pending or is_kw_pending:
+            request["task"] = task
             request["args"] = args
             request["kwargs"] = kwargs
             return request
