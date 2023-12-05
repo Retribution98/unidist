@@ -138,6 +138,7 @@ async def worker_loop():
                 # Discard data request to another worker, if data has become available
                 request_store.discard_data_request(request["id"])
 
+                RequestStore.get_instance().check_pending_get_requests(request["id"])
                 # Check pending requests. Maybe some data became available.
                 task_store.check_pending_tasks()
                 # Check pending actor requests also.

@@ -83,6 +83,8 @@ class RequestStore:
             If ``True``, the request should be processed immediatly
             even for a worker since it can get into controller mode.
         """
+        local_store = LocalObjectStore.get_instance()
+        local_store.maybe_update_data_id_map(data_id)
         if request_type == self.GET:
             if is_blocking_op:
                 self._blocking_get_requests[data_id].add(rank)
