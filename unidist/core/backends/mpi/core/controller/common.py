@@ -12,7 +12,9 @@ import unidist.core.backends.mpi.core.communication as communication
 from unidist.core.backends.mpi.core.async_operations import AsyncOperations
 from unidist.core.backends.mpi.core.local_object_store import LocalObjectStore
 from unidist.core.backends.mpi.core.shared_object_store import SharedObjectStore
-from unidist.core.backends.mpi.core.serialization import serialize_complex_data
+from unidist.core.backends.mpi.core.serialization import (
+    deserialize_complex_data,
+)
 
 
 logger = common.get_logger("common", "common.log")
@@ -138,32 +140,26 @@ def pull_data(comm, owner_rank=None):
         shared_store = SharedObjectStore.get_instance()
         data_id = info_package["id"]
 
-        if local_store.contains(data_id):
-            return {
-                "id": data_id,
-                "data": local_store.get(data_id),
-            }
+        if not local_store.contains(data_id):
+            shared_store.get(data_id, owner_rank, info_package)
 
-        data = shared_store.get(data_id, owner_rank, info_package)
-        local_store.put(data_id, data)
-        return {
-            "id": data_id,
-            "data": data,
-        }
+        return data_id
     elif info_package["package_type"] == common.MetadataPackage.LOCAL_DATA:
         local_store = LocalObjectStore.get_instance()
-        data = communication.recv_complex_data(
+        serialized_data = communication.recv_complex_data(
             comm, owner_rank, info_package=info_package
         )
         data_id = info_package["id"]
-        local_store.put(data_id, data)
-        return {
-            "id": data_id,
-            "data": data,
-        }
+        local_store.cache_serialized_data(data_id, serialized_data)
+        return data_id
     elif info_package["package_type"] == common.MetadataPackage.TASK_DATA:
-        return communication.recv_complex_data(
+        serialized_data = communication.recv_complex_data(
             comm, owner_rank, info_package=info_package
+        )
+        return deserialize_complex_data(
+            serialized_data["s_data"],
+            serialized_data["raw_buffers"],
+            serialized_data["buffer_count"],
         )
     else:
         raise ValueError("Unexpected package of data info!")
@@ -217,10 +213,10 @@ def request_worker_data(data_ids):
     exception_raised = None
     while data_count < len(data_ids):
         # Remote data gets available in the local store inside `pull_data`
-        complex_data = pull_data(mpi_state.global_comm)
-        if isinstance(complex_data["data"], Exception) and exception_raised is None:
-            exception_raised = complex_data["data"]
-        data_id = complex_data["id"]
+        data_id = pull_data(mpi_state.global_comm)
+        complex_data = local_store.get(data_id)
+        if isinstance(complex_data, Exception) and exception_raised is None:
+            exception_raised = complex_data
         if data_id in data_ids:
             data_count += 1
         else:
@@ -231,7 +227,7 @@ def request_worker_data(data_ids):
         raise exception_raised
 
 
-def _push_local_data(dest_rank, data_id, is_blocking_op, is_serialized):
+def _push_local_data(dest_rank, data_id, is_blocking_op):
     """
     Send local data associated with passed ID to target rank.
 
@@ -257,36 +253,34 @@ def _push_local_data(dest_rank, data_id, is_blocking_op, is_serialized):
         mpi_state = communication.MPIState.get_instance()
         async_operations = AsyncOperations.get_instance()
         # Push the local master data to the target worker directly
-        if is_serialized:
-            operation_data = local_store.get_serialized_data(data_id)
-            # Insert `data_id` to get full metadata package further
-            operation_data["id"] = data_id
-        else:
-            operation_data = {
-                "id": data_id,
-                "data": local_store.get(data_id),
-            }
+        serialized_data = local_store.get_serialized_data(data_id)
+        s_data = serialized_data["s_data"]
+        raw_buffers = serialized_data["raw_buffers"]
+        buffer_count = serialized_data["buffer_count"]
+        info_package = common.MetadataPackage.get_local_info(
+            data_id, len(s_data), [len(sbuf) for sbuf in raw_buffers], buffer_count
+        )
 
-        operation_type = common.Operation.PUT_DATA
         if is_blocking_op:
-            serialized_data = communication.send_complex_data(
-                mpi_state.global_comm,
-                operation_data,
-                dest_rank,
-                is_serialized=is_serialized,
+            communication.send_complex_data(
+                mpi_state.global_comm, s_data, raw_buffers, dest_rank, info_package
             )
         else:
-            h_list, serialized_data = communication.isend_complex_operation(
-                mpi_state.global_comm,
-                operation_type,
-                operation_data,
-                dest_rank,
-                is_serialized=is_serialized,
+            h_list = []
+            # send operation
+            operation_type = common.Operation.PUT_DATA
+            handler = communication.mpi_isend_operation(
+                mpi_state.global_comm, operation_type, dest_rank
             )
-            async_operations.extend(h_list)
+            h_list.append((handler, None))
+            # send_complex_data
 
-        if not is_serialized or not local_store.is_already_serialized(data_id):
-            local_store.cache_serialized_data(data_id, serialized_data)
+            handlers = communication.isend_complex_data(
+                mpi_state.global_comm, s_data, raw_buffers, dest_rank, info_package
+            )
+            h_list.extend(handlers)
+
+            async_operations.extend(h_list)
 
         #  Remember pushed id
         local_store.cache_send_info(data_id, dest_rank)
@@ -395,18 +389,7 @@ def push_data(dest_rank, value, is_blocking_op=False):
         if shared_store.contains(data_id):
             _push_shared_data(dest_rank, data_id, is_blocking_op)
         elif local_store.is_already_serialized(data_id):
-            _push_local_data(dest_rank, data_id, is_blocking_op, is_serialized=True)
-        elif local_store.contains(data_id):
-            data = local_store.get(data_id)
-            serialized_data = serialize_complex_data(data)
-            if shared_store.is_allocated() and shared_store.should_be_shared(
-                serialized_data
-            ):
-                shared_store.put(data_id, serialized_data)
-                _push_shared_data(dest_rank, data_id, is_blocking_op)
-            else:
-                local_store.cache_serialized_data(data_id, serialized_data)
-                _push_local_data(dest_rank, data_id, is_blocking_op, is_serialized=True)
+            _push_local_data(dest_rank, data_id, is_blocking_op)
         elif local_store.contains_data_owner(data_id):
             _push_data_owner(dest_rank, data_id)
         else:

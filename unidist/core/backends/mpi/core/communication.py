@@ -20,7 +20,6 @@ from unidist.config import MpiBackoff
 from unidist.core.backends.mpi.core.serialization import (
     SimpleDataSerializer,
     serialize_complex_data,
-    deserialize_complex_data,
 )
 import unidist.core.backends.mpi.core.common as common
 from unidist.config.backends.mpi.envvars import MpiSpawn, MpiHosts
@@ -631,7 +630,7 @@ def mpi_busy_wait_recv(comm, source_rank):
 # --------------------------------- #
 
 
-def _send_complex_data_impl(comm, s_data, raw_buffers, dest_rank, info_package):
+def send_complex_data(comm, s_data, raw_buffers, dest_rank, info_package):
     """
     Send already serialized complex data.
 
@@ -661,57 +660,7 @@ def _send_complex_data_impl(comm, s_data, raw_buffers, dest_rank, info_package):
             comm.Send(bigmpi(sbuf), dest=dest_rank, tag=common.MPITag.BUFFER)
 
 
-def send_complex_data(comm, data, dest_rank, is_serialized=False):
-    """
-    Send the data that consists of different user provided complex types, lambdas and buffers in a blocking way.
-
-    Parameters
-    ----------
-    comm : object
-        MPI communicator object.
-    data : object
-        Data object to send.
-    dest_rank : int
-        Target MPI process to transfer data.
-    is_serialized : bool, default: False
-        `data` is already serialized or not.
-
-    Returns
-    -------
-    dict
-        Serialized data for caching purpose.
-
-    Notes
-    -----
-    This blocking send is used when we have to wait for completion of the communication,
-    which is necessary for the pipeline to continue, or when the receiver is waiting for a result.
-    Otherwise, use non-blocking ``isend_complex_data``.
-    """
-    if is_serialized:
-        s_data = data["s_data"]
-        raw_buffers = data["raw_buffers"]
-        buffer_count = data["buffer_count"]
-        # pop `data_id` out of the dict because it will be send as part of metadata package
-        data_id = data.pop("id")
-        serialized_data = data
-    else:
-        data_id = data["id"]
-        serialized_data = serialize_complex_data(data)
-        s_data = serialized_data["s_data"]
-        raw_buffers = serialized_data["raw_buffers"]
-        buffer_count = serialized_data["buffer_count"]
-
-    info_package = common.MetadataPackage.get_local_info(
-        data_id, len(s_data), [len(sbuf) for sbuf in raw_buffers], buffer_count
-    )
-    # MPI communication
-    _send_complex_data_impl(comm, s_data, raw_buffers, dest_rank, info_package)
-
-    # For caching purpose
-    return serialized_data
-
-
-def _isend_complex_data_impl(comm, s_data, raw_buffers, dest_rank, info_package):
+def isend_complex_data(comm, s_data, raw_buffers, dest_rank, info_package):
     """
     Send serialized complex data.
 
@@ -754,65 +703,6 @@ def _isend_complex_data_impl(comm, s_data, raw_buffers, dest_rank, info_package)
     return handlers
 
 
-def isend_complex_data(comm, data, dest_rank, is_serialized=False):
-    """
-    Send the data that consists of different user provided complex types, lambdas and buffers in a non-blocking way.
-
-    Non-blocking asynchronous interface.
-
-    Parameters
-    ----------
-    comm : object
-        MPI communicator object.
-    data : object
-        Data object to send.
-    dest_rank : int
-        Target MPI process to transfer data.
-    is_serialized : bool, default: False
-        `operation_data` is already serialized or not.
-
-    Returns
-    -------
-    list
-        A list of pairs, ``MPI_Isend`` handler and associated data to send.
-    object
-        A serialized msgpack data.
-    list
-        A list of pickle buffers.
-    list
-        A list of buffers amount for each object.
-
-    Notes
-    -----
-    The special tags are used for this communication, namely,
-    ``common.MPITag.OBJECT`` and ``common.MPITag.BUFFER``.
-    """
-    if is_serialized:
-        s_data = data["s_data"]
-        raw_buffers = data["raw_buffers"]
-        buffer_count = data["buffer_count"]
-        # pop `data_id` out of the dict because it will be send as part of metadata package
-        data_id = data.pop("id")
-        info_package = common.MetadataPackage.get_local_info(
-            data_id, len(s_data), [len(sbuf) for sbuf in raw_buffers], buffer_count
-        )
-    else:
-        serialized_data = serialize_complex_data(data)
-        s_data = serialized_data["s_data"]
-        raw_buffers = serialized_data["raw_buffers"]
-        buffer_count = serialized_data["buffer_count"]
-        info_package = common.MetadataPackage.get_task_info(
-            len(s_data), [len(sbuf) for sbuf in raw_buffers], buffer_count
-        )
-
-    # MPI communication
-    handlers = _isend_complex_data_impl(
-        comm, s_data, raw_buffers, dest_rank, info_package
-    )
-
-    return handlers, s_data, raw_buffers, buffer_count
-
-
 def recv_complex_data(comm, source_rank, info_package):
     """
     Receive the data that may consist of different user provided complex types, lambdas and buffers.
@@ -846,7 +736,11 @@ def recv_complex_data(comm, source_rank, info_package):
         for rbuf in raw_buffers:
             comm.Recv(bigmpi(rbuf), source=source_rank, tag=common.MPITag.BUFFER)
 
-    return deserialize_complex_data(msgpack_buffer, raw_buffers, buffer_count)
+    return {
+        "s_data": msgpack_buffer,
+        "raw_buffers": raw_buffers,
+        "buffer_count": buffer_count,
+    }
 
 
 # ---------- #
@@ -920,9 +814,7 @@ def isend_simple_operation(comm, operation_type, operation_data, dest_rank):
     return handlers
 
 
-def isend_complex_operation(
-    comm, operation_type, operation_data, dest_rank, is_serialized=False
-):
+def isend_complex_operation(comm, operation_type, operation_data, dest_rank):
     """
     Send operation and data that consists of different user provided complex types, lambdas and buffers.
 
@@ -962,32 +854,19 @@ def isend_complex_operation(
     h1 = mpi_isend_operation(comm, operation_type, dest_rank)
     handlers.append((h1, None))
 
-    # Send operation data
-    if is_serialized:
-        # Send already serialized data
-        s_data = operation_data["s_data"]
-        raw_buffers = operation_data["raw_buffers"]
-        buffer_count = operation_data["buffer_count"]
-        # pop `data_id` out of the dict because it will be send as part of metadata package
-        data_id = operation_data.pop("id")
-        info_package = common.MetadataPackage.get_local_info(
-            data_id, len(s_data), [len(sbuf) for sbuf in raw_buffers], buffer_count
-        )
-        h2_list = _isend_complex_data_impl(
-            comm, s_data, raw_buffers, dest_rank, info_package
-        )
-        handlers.extend(h2_list)
-    else:
-        # Serialize and send the data
-        h2_list, s_data, raw_buffers, buffer_count = isend_complex_data(
-            comm, operation_data, dest_rank
-        )
-        handlers.extend(h2_list)
-    return handlers, {
-        "s_data": s_data,
-        "raw_buffers": raw_buffers,
-        "buffer_count": buffer_count,
-    }
+    # Serialize and send the data
+    serialized_data = serialize_complex_data(operation_data)
+    s_data = serialized_data["s_data"]
+    raw_buffers = serialized_data["raw_buffers"]
+    buffer_count = serialized_data["buffer_count"]
+    info_package = common.MetadataPackage.get_task_info(
+        len(s_data), [len(sbuf) for sbuf in raw_buffers], buffer_count
+    )
+    # MPI communication
+    handlers = isend_complex_data(comm, s_data, raw_buffers, dest_rank, info_package)
+    handlers.extend(handlers)
+
+    return handlers
 
 
 def isend_serialized_operation(comm, operation_type, operation_data, dest_rank):

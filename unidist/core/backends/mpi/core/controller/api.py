@@ -567,12 +567,11 @@ def submit(task, *args, num_returns=1, **kwargs):
         "output": output_ids,
     }
     async_operations = AsyncOperations.get_instance()
-    h_list, _ = communication.isend_complex_operation(
+    h_list = communication.isend_complex_operation(
         communication.MPIState.get_instance().global_comm,
         operation_type,
         operation_data,
         dest_rank,
-        is_serialized=False,
     )
     async_operations.extend(h_list)
 

@@ -24,8 +24,6 @@ class LocalObjectStore:
     __instance = None
 
     def __init__(self):
-        # Add local data {DataID : Data}
-        self._data_map = weakref.WeakKeyDictionary()
         # "strong" references to data IDs {DataID : DataID}
         # we are using dict here to improve performance when getting an element from it,
         # whereas other containers would require O(n) complexity
@@ -72,20 +70,6 @@ class LocalObjectStore:
         ):
             self._data_id_map[data_id] = data_id
 
-    def put(self, data_id, data):
-        """
-        Put `data` to internal dictionary.
-
-        Parameters
-        ----------
-        data_id : unidist.core.backends.mpi.core.common.MpiDataID
-            An ID to data.
-        data : object
-            Data to be put.
-        """
-        self._data_map[data_id] = data
-        self.maybe_update_data_id_map(data_id)
-
     def put_data_owner(self, data_id, rank):
         """
         Put data location (owner rank) to internal dictionary.
@@ -114,26 +98,21 @@ class LocalObjectStore:
         object
             Return local data associated with `data_id`.
         """
-        if data_id in self._data_map:
-            return self._data_map[data_id]
-        # data can be prepared for sending to another process, but is not saved to local storage
+        shared_object_store = SharedObjectStore.get_instance()
+        if self.is_already_serialized(data_id):
+            serialized_data = self.get_serialized_data(data_id)
+            value = deserialize_complex_data(
+                serialized_data["s_data"],
+                serialized_data["raw_buffers"],
+                serialized_data["buffer_count"],
+            )
+        elif shared_object_store.contains(data_id):
+            value = shared_object_store.get_value(data_id)
         else:
-            shared_object_store = SharedObjectStore.get_instance()
-            if self.is_already_serialized(data_id):
-                serialized_data = self.get_serialized_data(data_id)
-                value = deserialize_complex_data(
-                    serialized_data["s_data"],
-                    serialized_data["raw_buffers"],
-                    serialized_data["buffer_count"],
-                )
-            elif shared_object_store.contains(data_id):
-                value = shared_object_store.get(data_id)
-            else:
-                raise ValueError(
-                    "The current data ID is not contained in the LocalObjectStore."
-                )
-            self.put(data_id, value)
-            return value
+            raise ValueError(
+                "The current data ID is not contained in the LocalObjectStore."
+            )
+        return value
 
     def get_data_owner(self, data_id):
         """
@@ -166,10 +145,8 @@ class LocalObjectStore:
             Return the status if an object exist in local dictionary.
         """
         shared_object_store = SharedObjectStore.get_instance()
-        return (
-            data_id in self._data_map
-            or self.is_already_serialized(data_id)
-            or shared_object_store.contains(data_id)
+        return self.is_already_serialized(data_id) or shared_object_store.contains(
+            data_id
         )
 
     def contains_data_owner(self, data_id):

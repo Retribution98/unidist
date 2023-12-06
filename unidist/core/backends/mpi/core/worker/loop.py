@@ -127,16 +127,14 @@ async def worker_loop():
                 )
 
         elif operation_type == common.Operation.PUT_DATA:
-            request = pull_data(mpi_state.global_comm, source_rank)
+            data_id = pull_data(mpi_state.global_comm, source_rank)
             if not ready_to_shutdown_posted:
                 w_logger.debug(
-                    "PUT (RECV) {} id from {} rank".format(
-                        request["id"]._id, source_rank
-                    )
+                    "PUT (RECV) {} id from {} rank".format(data_id._id, source_rank)
                 )
 
                 # Discard data request to another worker, if data has become available
-                request_store.discard_data_request(request["id"])
+                request_store.discard_data_request(data_id)
 
                 # Check pending requests. Maybe some data became available.
                 task_store.check_pending_tasks()
@@ -155,10 +153,10 @@ async def worker_loop():
                 )
 
         elif operation_type == common.Operation.PUT_SHARED_DATA:
-            result = pull_data(mpi_state.global_comm, source_rank)
+            data_id = pull_data(mpi_state.global_comm, source_rank)
 
             # Clear cached request to another worker, if data_id became available
-            request_store.discard_data_request(result["id"])
+            request_store.discard_data_request(data_id)
 
             # Check pending requests. Maybe some data became available.
             task_store.check_pending_tasks()

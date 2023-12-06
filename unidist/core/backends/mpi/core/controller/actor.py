@@ -53,12 +53,11 @@ class ActorMethod:
             "handler": self._actor._handler_id,
         }
         async_operations = AsyncOperations.get_instance()
-        h_list, _ = communication.isend_complex_operation(
+        h_list = communication.isend_complex_operation(
             communication.MPIState.get_instance().global_comm,
             operation_type,
             operation_data,
             self._actor._owner_rank,
-            is_serialized=False,
         )
         async_operations.extend(h_list)
         return output_id
@@ -118,12 +117,11 @@ class Actor:
                 "handler": self._handler_id,
             }
             async_operations = AsyncOperations.get_instance()
-            h_list, _ = communication.isend_complex_operation(
+            h_list = communication.isend_complex_operation(
                 communication.MPIState.get_instance().global_comm,
                 operation_type,
                 operation_data,
                 self._owner_rank,
-                is_serialized=False,
             )
             async_operations.extend(h_list)
 
