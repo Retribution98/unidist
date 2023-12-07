@@ -391,6 +391,7 @@ def put(data):
         shared_store.put(data_id, serialized_data)
     else:
         local_store.cache_serialized_data(data_id, serialized_data)
+    local_store.maybe_update_data_id_map(data_id)
 
     logger.debug("PUT {} id".format(data_id._id))
 

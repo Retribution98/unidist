@@ -863,8 +863,8 @@ def isend_complex_operation(comm, operation_type, operation_data, dest_rank):
         len(s_data), [len(sbuf) for sbuf in raw_buffers], buffer_count
     )
     # MPI communication
-    handlers = isend_complex_data(comm, s_data, raw_buffers, dest_rank, info_package)
-    handlers.extend(handlers)
+    h_list = isend_complex_data(comm, s_data, raw_buffers, dest_rank, info_package)
+    handlers.extend(h_list)
 
     return handlers
 

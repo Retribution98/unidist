@@ -142,6 +142,7 @@ def pull_data(comm, owner_rank=None):
 
         if not local_store.contains(data_id):
             shared_store.get(data_id, owner_rank, info_package)
+            local_store.maybe_update_data_id_map(data_id)
 
         return data_id
     elif info_package["package_type"] == common.MetadataPackage.LOCAL_DATA:
@@ -151,6 +152,8 @@ def pull_data(comm, owner_rank=None):
         )
         data_id = info_package["id"]
         local_store.cache_serialized_data(data_id, serialized_data)
+        local_store.maybe_update_data_id_map(data_id)
+
         return data_id
     elif info_package["package_type"] == common.MetadataPackage.TASK_DATA:
         serialized_data = communication.recv_complex_data(

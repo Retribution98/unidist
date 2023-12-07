@@ -121,7 +121,7 @@ class ComplexDataSerializer:
     PICKLE_THRESHOLD = MpiPickleThreshold.get()
 
     def __init__(self, buffers=None, buffer_count=None):
-        self.buffers = buffers if buffers else []
+        self.buffers = list(buffers) if buffers else []
         self.buffer_count = list(buffer_count) if buffer_count else []
         self._callback_counter = 0
 

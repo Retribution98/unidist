@@ -223,7 +223,6 @@ class TaskStore:
         Exceptions are stored in output data IDs as value.
         """
         local_store = LocalObjectStore.get_instance()
-        shared_store = SharedObjectStore.get_instance()
         completed_data_ids = []
         # Note that if a task is coroutine,
         # the local store or the shared store will contain output data
@@ -261,13 +260,9 @@ class TaskStore:
                         and len(output_data_ids) > 1
                     ):
                         for output_id in output_data_ids:
-                            local_store.cache_serialized_data(
-                                output_id, serialized_data
-                            )
+                            local_store.put(output_id, serialized_data)
                     else:
-                        local_store.cache_serialized_data(
-                            output_data_ids, serialized_data
-                        )
+                        local_store.put(output_data_ids, serialized_data)
                 else:
                     if output_data_ids is not None:
                         if (
@@ -279,27 +274,11 @@ class TaskStore:
                                 zip(output_data_ids, output_values)
                             ):
                                 serialized_data = serialize_complex_data(value)
-                                if (
-                                    shared_store.is_allocated()
-                                    and shared_store.should_be_shared(serialized_data)
-                                ):
-                                    shared_store.put(output_id, serialized_data)
-                                else:
-                                    local_store.cache_serialized_data(
-                                        output_id, serialized_data
-                                    )
+                                local_store.put(output_id, serialized_data)
                                 completed_data_ids[idx] = output_id
                         else:
                             serialized_data = serialize_complex_data(output_values)
-                            if (
-                                shared_store.is_allocated()
-                                and shared_store.should_be_shared(serialized_data)
-                            ):
-                                shared_store.put(output_data_ids, serialized_data)
-                            else:
-                                local_store.cache_serialized_data(
-                                    output_data_ids, serialized_data
-                                )
+                            local_store.put(output_data_ids, serialized_data)
                             completed_data_ids = [output_data_ids]
 
                 RequestStore.get_instance().check_pending_get_requests(output_data_ids)
@@ -353,9 +332,9 @@ class TaskStore:
                     and len(output_data_ids) > 1
                 ):
                     for output_id in output_data_ids:
-                        local_store.cache_serialized_data(output_id, serialized_data)
+                        local_store.put(output_id, serialized_data)
                 else:
-                    local_store.cache_serialized_data(output_data_ids, serialized_data)
+                    local_store.put(output_data_ids, serialized_data)
             else:
                 if output_data_ids is not None:
                     if (
@@ -367,27 +346,11 @@ class TaskStore:
                             zip(output_data_ids, output_values)
                         ):
                             serialized_data = serialize_complex_data(value)
-                            if (
-                                shared_store.is_allocated()
-                                and shared_store.should_be_shared(serialized_data)
-                            ):
-                                shared_store.put(output_id, serialized_data)
-                            else:
-                                local_store.cache_serialized_data(
-                                    output_id, serialized_data
-                                )
+                            local_store.put(output_id, serialized_data)
                             completed_data_ids[idx] = output_id
                     else:
                         serialized_data = serialize_complex_data(output_values)
-                        if (
-                            shared_store.is_allocated()
-                            and shared_store.should_be_shared(serialized_data)
-                        ):
-                            shared_store.put(output_data_ids, serialized_data)
-                        else:
-                            local_store.cache_serialized_data(
-                                output_data_ids, serialized_data
-                            )
+                        local_store.put(output_data_ids, serialized_data)
                         completed_data_ids = [output_data_ids]
             RequestStore.get_instance().check_pending_get_requests(output_data_ids)
             # Monitor the task execution.
@@ -420,12 +383,13 @@ class TaskStore:
             Same request if the task couldn`t be executed, otherwise ``None``.
         """
         # Parse request
-        local_store = LocalObjectStore.get_instance()
         task = request["task"]
         # Remote function here is a data id so we have to retrieve it from the storage,
         # whereas actor method is already materialized in the worker loop.
         if is_data_id(task):
-            task = local_store.get(task)
+            task, is_task_pending = self.unwrap_local_data_id(task)
+        else:
+            is_task_pending = False
         args = request["args"]
         kwargs = request["kwargs"]
         output_ids = request["output"]
@@ -445,9 +409,12 @@ class TaskStore:
             kwargs, self.unwrap_local_data_id
         )
 
+        w_logger.debug("Is task pending - {}".format(is_task_pending))
         w_logger.debug("Is pending - {}".format(is_pending))
+        w_logger.debug("Is kw pending - {}".format(is_kw_pending))
 
-        if is_pending or is_kw_pending:
+        if is_task_pending or is_pending or is_kw_pending:
+            request["task"] = task
             request["args"] = args
             request["kwargs"] = kwargs
             return request

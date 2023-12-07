@@ -84,6 +84,16 @@ class LocalObjectStore:
         self._data_owner_map[data_id] = rank
         self.maybe_update_data_id_map(data_id)
 
+    def put(self, data_id, serialized_data):
+        shared_store = SharedObjectStore.get_instance()
+        if shared_store.is_allocated() and shared_store.should_be_shared(
+            serialized_data
+        ):
+            shared_store.put(data_id, serialized_data)
+        else:
+            self.cache_serialized_data(data_id, serialized_data)
+        self.maybe_update_data_id_map(data_id)
+
     def get(self, data_id):
         """
         Get the data from a local dictionary.
@@ -282,9 +292,9 @@ class LocalObjectStore:
         """
         # Copying is necessary to avoid corruption of data obtained through out-of-band serialization,
         # and buffers are marked read-only to prevent them from being modified.
-        data["raw_buffers"] = [
-            memoryview(buf.tobytes()).toreadonly() for buf in data["raw_buffers"]
-        ]
+        data["raw_buffers"] = tuple(
+            buf.tobytes() if buf is memoryview else buf for buf in data["raw_buffers"]
+        )
         self._serialization_cache[data_id] = data
         self.maybe_update_data_id_map(data_id)
 
